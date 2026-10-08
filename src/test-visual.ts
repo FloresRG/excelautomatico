@@ -1,3 +1,5 @@
+process.env.HEADLESS = 'false';
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { AutomationService } from './automation/automation.service';

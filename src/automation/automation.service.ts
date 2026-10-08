@@ -30,7 +30,11 @@ export class AutomationService {
   private currentPageUrlAlt = '';
 
   constructor(@Optional() private readonly configService?: ConfigService) {
-    this.downloadPath = path.join(process.cwd(), 'descargas');
+    const customDownloadPath = this.getEnv('DOWNLOAD_PATH');
+    this.downloadPath = customDownloadPath
+      ? path.resolve(process.cwd(), customDownloadPath)
+      : path.join(process.cwd(), 'descargas');
+
     if (!fs.existsSync(this.downloadPath)) {
       fs.mkdirSync(this.downloadPath, { recursive: true });
       console.log(`📁 [INIT] Directorio creado: ${this.downloadPath}`);
@@ -107,10 +111,11 @@ export class AutomationService {
   /* ─────────── INIT BROWSER ─────────── */
 
   private async initializeBrowser(): Promise<{ browser: Browser; page: Page }> {
-    const isHeadless = this.getEnv('HEADLESS') === 'true';
+    const headlessEnv = this.getEnv('HEADLESS');
+    const isHeadless = headlessEnv !== undefined ? headlessEnv === 'true' : true;
     console.log(
       `🚀 [BROWSER] Iniciando Chromium en modo: ${
-        isHeadless ? 'HEADLESS (segundo plano)' : 'VISIBLE (en tu pantalla con slowMo 300ms)'
+        isHeadless ? 'HEADLESS (segundo plano)' : 'VISIBLE (en tu pantalla con slowMo 400ms)'
       }`,
     );
 
