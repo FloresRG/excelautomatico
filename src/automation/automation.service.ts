@@ -445,11 +445,9 @@ export class AutomationService {
       });
 
       console.log(`✅ [LARAVEL] Respuesta recibida (${response.status}):`, response.data);
-      console.log(`💾 [EXCEL] Archivo conservado en disco: ${excelPath}`);
 
       return response.data;
     } catch (error: any) {
-      console.log(`💾 [EXCEL] Archivo conservado en disco para análisis: ${excelPath}`);
       if (error.response) {
         console.error(
           `❌ [LARAVEL] Error en respuesta de Laravel (HTTP ${error.response.status}):`,
@@ -459,6 +457,9 @@ export class AutomationService {
         console.error(`❌ [LARAVEL] Error de conexión con Laravel:`, error.message);
       }
       throw error;
+    } finally {
+      // Eliminar archivo después de enviar a Laravel
+      await this.deleteFile(excelPath);
     }
   }
 
