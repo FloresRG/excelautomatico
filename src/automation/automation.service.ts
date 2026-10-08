@@ -315,15 +315,105 @@ export class AutomationService {
     }
   }
 
-  /* ─────────── REFRESH ─────────── */
+  /* ─────────── REFRESH Y FECHA ─────────── */
+
+  /**
+   * Obtiene la fecha actual en formato YYYY-MM-DD según la zona horaria de Bolivia
+   */
+  getTodayBolivia(): string {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/La_Paz',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+  }
 
   private async refreshPageForLatestData(page: Page) {
-    console.log('🔄 [REFRESH] Actualizando la página para cargar datos frescos...');
+    console.log('🔄 [REFRESH] Recargando la página para reiniciar estado...');
     await page.reload({
       waitUntil: 'domcontentloaded',
       timeout: 25000,
     });
-    await this.randomDelay(500, 1000);
+    await this.randomDelay(1000, 1500);
+  }
+
+  /**
+   * Actualiza el reporte de movimientos en la página:
+   * 1. Asigna la fecha (hoy en Bolivia o la indicada) a #startDate1
+   * 2. Hace clic en el botón "Actualizar Reporte" (#fondoreportes)
+   * 3. Espera que la consulta AJAX y la tabla DataTables terminen de redibujarse
+   */
+  private async updateReportData(page: Page, targetDate?: string): Promise<boolean> {
+    const fecha = targetDate || this.getTodayBolivia();
+    console.log(`📅 [REPORT-UPDATE] Actualizando reporte con fecha: ${fecha}...`);
+
+    try {
+      console.log('🔍 [REPORT-UPDATE] Buscando campo de fecha (#startDate1)...');
+      const inputField = await page
+        .waitForSelector('#startDate1', { timeout: 10000 })
+        .catch(() => null);
+
+      if (!inputField) {
+        console.error('❌ [REPORT-UPDATE] No se encontró el campo "#startDate1"');
+        await this.saveDebugSnapshot(page, 'update_sin_startDate1');
+        return false;
+      }
+
+      console.log(`✍️ [REPORT-UPDATE] Asignando fecha ${fecha} a #startDate1...`);
+      await page.evaluate((fechaValue) => {
+        const input = document.getElementById(
+          'startDate1',
+        ) as HTMLInputElement;
+        if (input) {
+          input.value = fechaValue;
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }, fecha);
+
+      await this.randomDelay(300, 600);
+
+      console.log('🔘 [REPORT-UPDATE] Buscando botón "Actualizar Reporte" (#fondoreportes)...');
+      const btnField = await page
+        .waitForSelector('#fondoreportes', { timeout: 8000 })
+        .catch(() => null);
+
+      if (!btnField) {
+        console.error('❌ [REPORT-UPDATE] No se encontró el botón "#fondoreportes"');
+        await this.saveDebugSnapshot(page, 'update_sin_fondoreportes');
+        return false;
+      }
+
+      console.log('🖱️ [REPORT-UPDATE] Clic en "#fondoreportes" para consultar últimos movimientos...');
+      await page.click('#fondoreportes');
+
+      // Esperar a que la petición de red termine (AJAX del BCP)
+      console.log('⏳ [REPORT-UPDATE] Esperando respuesta del servidor y carga de datos...');
+      await page
+        .waitForLoadState('networkidle', { timeout: 15000 })
+        .catch(() => {
+          console.log('ℹ️ [REPORT-UPDATE] Espera de red finalizada, continuando...');
+        });
+
+      // Esperar a que cualquier indicador de carga o spinner se oculte
+      await page
+        .waitForSelector(
+          '.dataTables_processing, .blockUI, div[id*="loading"], div[class*="loading"]',
+          { state: 'hidden', timeout: 10000 },
+        )
+        .catch(() => {});
+
+      // Retardo de seguridad para asegurar que DataTables terminó de procesar y redibujar el DOM
+      await this.randomDelay(2000, 3000);
+
+      console.log('✅ [REPORT-UPDATE] Reporte actualizado exitosamente con los últimos datos.');
+      return true;
+    } catch (error: any) {
+      console.error('❌ [REPORT-UPDATE] Error al actualizar reporte:', error.message);
+      await this.saveDebugSnapshot(page, 'update_report_error');
+      return false;
+    }
   }
 
   /* ─────────── ELIMINAR ARCHIVO ─────────── */
@@ -347,23 +437,34 @@ export class AutomationService {
     formData.append('archivo_excel', fs.createReadStream(excelPath));
     formData.append('origen', 'nestjs');
 
-    const response = await axios.post(this.laravelApiUrl, formData, {
-      headers: formData.getHeaders(),
-      timeout: 30000,
-      maxBodyLength: Infinity,
-    });
+    try {
+      const response = await axios.post(this.laravelApiUrl, formData, {
+        headers: formData.getHeaders(),
+        timeout: 30000,
+        maxBodyLength: Infinity,
+      });
 
-    console.log(`✅ [LARAVEL] Respuesta recibida:`, response.status, response.data);
+      console.log(`✅ [LARAVEL] Respuesta recibida (${response.status}):`, response.data);
+      console.log(`💾 [EXCEL] Archivo conservado en disco: ${excelPath}`);
 
-    // Eliminar archivo después de enviar a Laravel
-    await this.deleteFile(excelPath);
-
-    return response.data;
+      return response.data;
+    } catch (error: any) {
+      console.log(`💾 [EXCEL] Archivo conservado en disco para análisis: ${excelPath}`);
+      if (error.response) {
+        console.error(
+          `❌ [LARAVEL] Error en respuesta de Laravel (HTTP ${error.response.status}):`,
+          error.response.data,
+        );
+      } else {
+        console.error(`❌ [LARAVEL] Error de conexión con Laravel:`, error.message);
+      }
+      throw error;
+    }
   }
 
   /* ─────────── MAIN PRINCIPAL ─────────── */
 
-  async downloadExcelAndSendToLaravel() {
+  async downloadExcelAndSendToLaravel(fecha?: string) {
     let excelPath = '';
 
     if (!this.browser || !this.page) {
@@ -385,6 +486,14 @@ export class AutomationService {
       } else {
         await this.refreshPageForLatestData(this.page);
       }
+    }
+
+    // Actualizar reporte con la fecha indicada (o hoy por defecto) y pulsar #fondoreportes
+    const fechaFiltro = fecha || this.getTodayBolivia();
+    console.log(`🔄 [MAIN] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`);
+    const updated = await this.updateReportData(this.page!, fechaFiltro);
+    if (!updated) {
+      console.warn('⚠️ [MAIN] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...');
     }
 
     console.log('🔍 [MAIN] Buscando botón "Exportar a Excel"...');
@@ -421,6 +530,7 @@ export class AutomationService {
       success: true,
       message: 'Excel descargado y enviado a Laravel exitosamente',
       excelPath,
+      fechaFiltro,
       laravelResponse,
       timestamp: new Date().toISOString(),
       reusedSession: this.isLoggedIn,
@@ -429,7 +539,7 @@ export class AutomationService {
 
   /* ─────────── MAIN ALTERNATIVO ─────────── */
 
-  async downloadExcelAndSendToLaravelAlt() {
+  async downloadExcelAndSendToLaravelAlt(fecha?: string) {
     let excelPath = '';
 
     if (!this.browserAlt || !this.pageAlt) {
@@ -451,6 +561,14 @@ export class AutomationService {
       } else {
         await this.refreshPageForLatestData(this.pageAlt);
       }
+    }
+
+    // Actualizar reporte con la fecha indicada (o hoy por defecto) y pulsar #fondoreportes
+    const fechaFiltro = fecha || this.getTodayBolivia();
+    console.log(`🔄 [ALT] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`);
+    const updated = await this.updateReportData(this.pageAlt!, fechaFiltro);
+    if (!updated) {
+      console.warn('⚠️ [ALT] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...');
     }
 
     console.log('🔍 [ALT] Buscando botón "Exportar a Excel"...');
@@ -488,6 +606,7 @@ export class AutomationService {
       message:
         'Excel descargado y enviado a Laravel exitosamente (usando credenciales alternativas)',
       excelPath,
+      fechaFiltro,
       laravelResponse,
       timestamp: new Date().toISOString(),
       reusedSession: this.isLoggedInAlt,
@@ -522,7 +641,7 @@ export class AutomationService {
 
     // Aplicar filtro de fecha antes de descargar
     console.log(`📅 [FILTER] Aplicando filtro de fecha: ${fecha}...`);
-    const filterApplied = await this.filterByDate(this.pageAlt!, fecha);
+    const filterApplied = await this.updateReportData(this.pageAlt!, fecha);
     if (!filterApplied) {
       throw new Error(
         `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
@@ -571,58 +690,10 @@ export class AutomationService {
     };
   }
 
-  /* ─────────── FILTRO FECHA ─────────── */
+  /* ─────────── RETROCOMPATIBILIDAD ─────────── */
 
   private async filterByDate(page: Page, fecha: string): Promise<boolean> {
-    try {
-      console.log('🔍 [DATE] Buscando campo de fecha (#startDate1)...');
-      const inputField = await page
-        .waitForSelector('#startDate1', { timeout: 10000 })
-        .catch(() => null);
-
-      if (!inputField) {
-        console.error('❌ [DATE] No se encontró el campo "#startDate1"');
-        await this.saveDebugSnapshot(page, 'date_sin_startDate1');
-        return false;
-      }
-
-      console.log(`✍️ [DATE] Asignando fecha ${fecha} a #startDate1...`);
-      await page.evaluate((fechaValue) => {
-        const input = document.getElementById(
-          'startDate1',
-        ) as HTMLInputElement;
-        if (input) {
-          input.value = fechaValue;
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-      }, fecha);
-
-      await this.randomDelay(300, 600);
-
-      console.log('🔘 [DATE] Buscando botón "Actualizar Reporte" (#fondoreportes)...');
-      const btnField = await page
-        .waitForSelector('#fondoreportes', { timeout: 8000 })
-        .catch(() => null);
-
-      if (!btnField) {
-        console.error('❌ [DATE] No se encontró el botón "#fondoreportes"');
-        await this.saveDebugSnapshot(page, 'date_sin_fondoreportes');
-        return false;
-      }
-
-      console.log('🖱️ [DATE] Clic en "#fondoreportes"...');
-      await page.click('#fondoreportes');
-
-      // Esperar a que la página se actualice
-      await this.randomDelay(1500, 2500);
-
-      return true;
-    } catch (error: any) {
-      console.error('❌ [DATE] Error al filtrar por fecha:', error.message);
-      await this.saveDebugSnapshot(page, 'date_error');
-      return false;
-    }
+    return this.updateReportData(page, fecha);
   }
 
   /* ─────────── API PÚBLICA ─────────── */

@@ -78,6 +78,11 @@ export class AutomationController {
           type: 'string',
           description: 'Token de autenticación único',
           example: ''
+        },
+        fecha: {
+          type: 'string',
+          description: 'Fecha opcional en formato YYYY-MM-DD. Si no se envía, usa la fecha de hoy en Bolivia.',
+          example: '2026-10-08'
         }
       },
       required: ['auth_token'],
@@ -101,8 +106,8 @@ export class AutomationController {
       }
     }
   })
-  async downloadAndSendToLaravel(@Body() body: { auth_token: string }) {
-    return this.automationService.downloadExcelAndSendToLaravel();
+  async downloadAndSendToLaravel(@Body() body: { auth_token: string; fecha?: string }) {
+    return this.automationService.downloadExcelAndSendToLaravel(body?.fecha);
   }
 
   @Get('session-status')
@@ -183,6 +188,11 @@ export class AutomationController {
           type: 'string',
           description: 'Token de autenticación único',
           example: ''
+        },
+        fecha: {
+          type: 'string',
+          description: 'Fecha opcional en formato YYYY-MM-DD. Si no se envía, usa la fecha de hoy en Bolivia.',
+          example: '2026-10-08'
         }
       },
       required: ['auth_token'],
@@ -206,9 +216,9 @@ export class AutomationController {
       }
     }
   })
-  async downloadAndSendToLaravelAlt(@Body() body: { auth_token: string }) {
+  async downloadAndSendToLaravelAlt(@Body() body: { auth_token: string; fecha?: string }) {
     console.log('🆕 [API] Endpoint alternativo ejecutado con credenciales diferentes');
-    return this.automationService.downloadExcelAndSendToLaravelAlt();
+    return this.automationService.downloadExcelAndSendToLaravelAlt(body?.fecha);
   }
 
   // ENDPOINT CON FILTRO DE FECHA

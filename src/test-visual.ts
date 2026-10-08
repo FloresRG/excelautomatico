@@ -34,7 +34,7 @@ async function runVisualTest() {
 
     console.log('\n======================================================');
     console.log('✅ PROCESO COMPLETADO Y ENVIADO A LARAVEL EXITOSAMENTE');
-    console.log('🗑️ El archivo se descargó, se envió a Laravel y se eliminó de disco.');
+    console.log('💾 El archivo se descargó y se conservó en la carpeta "descargas/" para revisión.');
     console.log('⏳ Manteniendo el navegador abierto 15 segundos para visualización...');
     console.log('======================================================\n');
     await new Promise((resolve) => setTimeout(resolve, 15000));
