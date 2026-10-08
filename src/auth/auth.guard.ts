@@ -11,13 +11,16 @@ export class AuthTokenGuard implements CanActivate {
     
     // Obtener token del header Authorization o del body
     const authHeader = request.headers.authorization;
-    const tokenFromBody = request.body?.auth_token;
+    const tokenFromBody =
+      request.body?.auth_token || request.body?.automation_service_token;
     
     const token = authHeader 
       ? authHeader.replace('Bearer ', '') 
       : tokenFromBody;
 
-    const validToken = this.configService.get<string>('AUTH_TOKEN');
+    const validToken =
+      this.configService.get<string>('AUTOMATION_SERVICE_TOKEN') ||
+      this.configService.get<string>('AUTH_TOKEN');
     
     if (validToken) {
       if (!token) {
