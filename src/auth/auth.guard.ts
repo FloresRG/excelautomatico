@@ -17,14 +17,15 @@ export class AuthTokenGuard implements CanActivate {
       ? authHeader.replace('Bearer ', '') 
       : tokenFromBody;
 
-    if (!token) {
-      throw new UnauthorizedException('Token de autenticación requerido');
-    }
-
     const validToken = this.configService.get<string>('AUTH_TOKEN');
     
-    if (token !== validToken) {
-      throw new UnauthorizedException('Token de autenticación inválido');
+    if (validToken) {
+      if (!token) {
+        throw new UnauthorizedException('Token de autenticación requerido');
+      }
+      if (token !== validToken) {
+        throw new UnauthorizedException('Token de autenticación inválido');
+      }
     }
 
     return true;
