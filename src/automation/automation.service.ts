@@ -15,6 +15,8 @@ chromium.use(StealthPlugin());
 export class AutomationService {
   private downloadPath: string;
   private laravelApiUrl: string;
+  private readonly excelBtnSelector =
+    'button.buttons-excel[title="Exportar a Excel"], button[title="Exportar a Excel"], button.buttons-excel';
 
   private browser: Browser | null = null;
   private page: Page | null = null;
@@ -95,7 +97,7 @@ export class AutomationService {
     try {
       const currentUrl = page.url();
       const hasExportBtn =
-        (await page.$('button[title="Exportar a Excel"]')) !== null;
+        (await page.$(this.excelBtnSelector)) !== null;
       return hasExportBtn || currentUrl.toLowerCase().includes('dashboard');
     } catch {
       return false;
@@ -348,8 +350,8 @@ export class AutomationService {
 
     console.log(`✅ [LARAVEL] Respuesta recibida:`, response.status, response.data);
 
-    // No eliminar archivo temporalmente para inspección
-    // await this.deleteFile(excelPath);
+    // Eliminar archivo después de enviar a Laravel
+    await this.deleteFile(excelPath);
 
     return response.data;
   }
@@ -381,7 +383,7 @@ export class AutomationService {
     }
 
     console.log('🔍 [MAIN] Buscando botón "Exportar a Excel"...');
-    const excelBtn = 'button[title="Exportar a Excel"]';
+    const excelBtn = this.excelBtnSelector;
     const foundBtn = await this.page!
       .waitForSelector(excelBtn, { timeout: 20000 })
       .catch(() => null);
@@ -447,7 +449,7 @@ export class AutomationService {
     }
 
     console.log('🔍 [ALT] Buscando botón "Exportar a Excel"...');
-    const excelBtn = 'button[title="Exportar a Excel"]';
+    const excelBtn = this.excelBtnSelector;
     const foundBtn = await this.pageAlt!
       .waitForSelector(excelBtn, { timeout: 20000 })
       .catch(() => null);
@@ -523,7 +525,7 @@ export class AutomationService {
     }
 
     console.log('🔍 [FILTER] Buscando botón "Exportar a Excel"...');
-    const excelBtn = 'button[title="Exportar a Excel"]';
+    const excelBtn = this.excelBtnSelector;
     const foundBtn = await this.pageAlt!
       .waitForSelector(excelBtn, { timeout: 20000 })
       .catch(() => null);

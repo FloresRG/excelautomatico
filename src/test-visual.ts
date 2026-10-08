@@ -31,12 +31,11 @@ async function runVisualTest() {
     }
 
     console.log('\n======================================================');
-    console.log('👀 ¡ATENCIÓN! EL NAVEGADOR ESTÁ ABIERTO EN TU PANTALLA');
-    console.log('👉 Puedes mirar la página, hacer clic o inspeccionar (F12).');
-    console.log('⏳ Se mantendrá abierto durante 3 minutos (180 segundos)...');
-    console.log('👉 Presiona Ctrl+C en cualquier momento para terminar antes.');
+    console.log('✅ PROCESO COMPLETADO Y ENVIADO A LARAVEL EXITOSAMENTE');
+    console.log('🗑️ El archivo se descargó, se envió a Laravel y se eliminó de disco.');
+    console.log('⏳ Manteniendo el navegador abierto 15 segundos para visualización...');
     console.log('======================================================\n');
-    await new Promise((resolve) => setTimeout(resolve, 180000));
+    await new Promise((resolve) => setTimeout(resolve, 15000));
 
   } catch (error: any) {
     console.error('\n❌ [ERROR DETECTADO DURANTE LA PRUEBA]:');
