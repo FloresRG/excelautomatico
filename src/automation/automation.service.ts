@@ -110,6 +110,8 @@ export class AutomationService {
 
   /* ─────────── INIT BROWSER ─────────── */
 
+ /* ─────────── INIT BROWSER ─────────── */
+
   private async initializeBrowser(): Promise<{ browser: Browser; page: Page }> {
     const headlessEnv = this.getEnv('HEADLESS');
     const isHeadless = headlessEnv !== undefined ? headlessEnv === 'true' : true;
@@ -127,12 +129,13 @@ export class AutomationService {
         '--no-sandbox',
         '--disable-dev-shm-usage',
         '--disable-blink-features=AutomationControlled',
+        '--window-size=1920,1080', // <-- Agregar esto para forzar escritorio
       ],
     });
 
     const context = await browser.newContext({
       acceptDownloads: true,
-      viewport: isHeadless ? { width: 1366, height: 768 } : null,
+      viewport: { width: 1920, height: 1080 }, // <-- Forzar resolución fija en Headless
       locale: 'es-ES',
       timezoneId: 'America/La_Paz',
       userAgent:
@@ -291,7 +294,7 @@ export class AutomationService {
       console.log('🔘 [LOGIN-ALT] Presionando botón ingresar (#authbtn)...');
       await Promise.all([
         page
-          .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 35000 })
+          .waitForNavigation({ waitUntil: 'networkidle', timeout: 45000 }) // <-- Cambiado de domcontentloaded a networkidle
           .catch((err) => {
             console.log(
               '⚠️ [LOGIN-ALT] Navegación tardó o finalizó:',
@@ -301,7 +304,7 @@ export class AutomationService {
         page.click('#authbtn'),
       ]);
 
-      await this.randomDelay(1500, 2500);
+      await this.randomDelay(2000, 3000); // Dar un margen extra de renderizado DOM
       console.log(`📍 [LOGIN-ALT] URL tras autenticación: ${page.url()}`);
 
       this.isLoggedInAlt = true;
@@ -349,9 +352,14 @@ export class AutomationService {
     console.log(`📅 [REPORT-UPDATE] Actualizando reporte con fecha: ${fecha}...`);
 
     try {
+      // Espera activa a que el DOM o la URL cambien desde la pantalla de login
+      await page.waitForLoadState('networkidle').catch(() => {});
+
       console.log('🔍 [REPORT-UPDATE] Buscando campo de fecha (#startDate1)...');
+      
+      // Aumentamos el timeout a 25 segundos para compensar la latencia del VPS
       const inputField = await page
-        .waitForSelector('#startDate1', { timeout: 10000 })
+        .waitForSelector('#startDate1', { state: 'attached', timeout: 25000 })
         .catch(() => null);
 
       if (!inputField) {
@@ -372,11 +380,11 @@ export class AutomationService {
         }
       }, fecha);
 
-      await this.randomDelay(300, 600);
+      await this.randomDelay(500, 1000);
 
       console.log('🔘 [REPORT-UPDATE] Buscando botón "Actualizar Reporte" (#fondoreportes)...');
       const btnField = await page
-        .waitForSelector('#fondoreportes', { timeout: 8000 })
+        .waitForSelector('#fondoreportes', { timeout: 10000 })
         .catch(() => null);
 
       if (!btnField) {
@@ -391,20 +399,12 @@ export class AutomationService {
       // Esperar a que la petición de red termine (AJAX del BCP)
       console.log('⏳ [REPORT-UPDATE] Esperando respuesta del servidor y carga de datos...');
       await page
-        .waitForLoadState('networkidle', { timeout: 15000 })
+        .waitForLoadState('networkidle', { timeout: 20000 })
         .catch(() => {
           console.log('ℹ️ [REPORT-UPDATE] Espera de red finalizada, continuando...');
         });
 
-      // Esperar a que cualquier indicador de carga o spinner se oculte
-      await page
-        .waitForSelector(
-          '.dataTables_processing, .blockUI, div[id*="loading"], div[class*="loading"]',
-          { state: 'hidden', timeout: 10000 },
-        )
-        .catch(() => {});
-
-      // Retardo de seguridad para asegurar que DataTables terminó de procesar y redibujar el DOM
+      // Retardo de seguridad para asegurar que DataTables terminó de procesar
       await this.randomDelay(2000, 3000);
 
       console.log('✅ [REPORT-UPDATE] Reporte actualizado exitosamente con los últimos datos.');
