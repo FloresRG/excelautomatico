@@ -18,6 +18,8 @@ export class AutomationService {
   private readonly excelBtnSelector =
     'button.buttons-excel[title="Exportar a Excel"], button[title="Exportar a Excel"], button.buttons-excel';
 
+  private readonly reportUrl = 'https://apppro.bcp.com.bo/Multiplica/ReportDetail';
+
   private browser: Browser | null = null;
   private page: Page | null = null;
   private isLoggedIn = false;
@@ -102,15 +104,17 @@ export class AutomationService {
       const currentUrl = page.url();
       const hasExportBtn =
         (await page.$(this.excelBtnSelector)) !== null;
-      return hasExportBtn || currentUrl.toLowerCase().includes('dashboard');
+      return (
+        hasExportBtn ||
+        currentUrl.toLowerCase().includes('reportdetail') ||
+        currentUrl.toLowerCase().includes('dashboard')
+      );
     } catch {
       return false;
     }
   }
 
   /* ─────────── INIT BROWSER ─────────── */
-
- /* ─────────── INIT BROWSER ─────────── */
 
   private async initializeBrowser(): Promise<{ browser: Browser; page: Page }> {
     const headlessEnv = this.getEnv('HEADLESS');
@@ -129,13 +133,13 @@ export class AutomationService {
         '--no-sandbox',
         '--disable-dev-shm-usage',
         '--disable-blink-features=AutomationControlled',
-        '--window-size=1920,1080', // <-- Agregar esto para forzar escritorio
+        '--window-size=1920,1080',
       ],
     });
 
     const context = await browser.newContext({
       acceptDownloads: true,
-      viewport: { width: 1920, height: 1080 }, // <-- Forzar resolución fija en Headless
+      viewport: { width: 1920, height: 1080 },
       locale: 'es-ES',
       timezoneId: 'America/La_Paz',
       userAgent:
@@ -171,11 +175,8 @@ export class AutomationService {
       });
 
       console.log(`📍 [LOGIN-MAIN] URL actual: ${page.url()}`);
-      console.log(`📄 [LOGIN-MAIN] Título de página: "${await page.title()}"`);
-
       await this.simulateHumanBehavior(page);
 
-      // Verificar selector de usuario
       console.log('🔍 [LOGIN-MAIN] Buscando campo de usuario (#authname)...');
       const userField = await page
         .waitForSelector('#authname', { timeout: 15000 })
@@ -190,47 +191,19 @@ export class AutomationService {
       console.log(`✍️ [LOGIN-MAIN] Escribiendo usuario: ${user}`);
       await this.typeWithDelay(page, '#authname', user);
 
-      // Verificar selector de contraseña
       console.log('🔍 [LOGIN-MAIN] Buscando campo de contraseña (#authpass)...');
-      const passField = await page
-        .waitForSelector('#authpass', { timeout: 8000 })
-        .catch(() => null);
-
-      if (!passField) {
-        console.error('❌ [LOGIN-MAIN] No se encontró el selector "#authpass"');
-        await this.saveDebugSnapshot(page, 'login_main_sin_authpass');
-        return false;
-      }
-
-      console.log('✍️ [LOGIN-MAIN] Escribiendo contraseña...');
+      await page.waitForSelector('#authpass', { timeout: 8000 });
       await this.typeWithDelay(page, '#authpass', pass);
 
-      // Click en botón de ingreso
-      console.log('🖱️ [LOGIN-MAIN] Buscando botón ingresar (#authbtn)...');
-      const btnField = await page
-        .waitForSelector('#authbtn', { timeout: 8000 })
-        .catch(() => null);
-
-      if (!btnField) {
-        console.error('❌ [LOGIN-MAIN] No se encontró el botón "#authbtn"');
-        await this.saveDebugSnapshot(page, 'login_main_sin_authbtn');
-        return false;
-      }
-
       console.log('🔘 [LOGIN-MAIN] Presionando botón de ingreso (#authbtn)...');
-      await Promise.all([
-        page
-          .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 35000 })
-          .catch((err) => {
-            console.log(
-              '⚠️ [LOGIN-MAIN] Navegación tardó o finalizó:',
-              err.message,
-            );
-          }),
-        page.click('#authbtn'),
-      ]);
+      await page.click('#authbtn');
 
-      await this.randomDelay(1500, 2500);
+      // 🛑 CAMBIO CLAVE: Esperar y forzar navegación a ReportDetail
+      await this.randomDelay(2000, 3000);
+      console.log(`🌐 [LOGIN-MAIN] Redirigiendo a la vista de reportes: ${this.reportUrl}`);
+      await page.goto(this.reportUrl, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {});
+
+      await this.randomDelay(2000, 3000);
       console.log(`📍 [LOGIN-MAIN] URL tras autenticación: ${page.url()}`);
 
       this.isLoggedIn = true;
@@ -243,8 +216,6 @@ export class AutomationService {
       return false;
     }
   }
-
-  /* ─────────── LOGIN ALTERNATIVO ─────────── */
 
   /* ─────────── LOGIN ALTERNATIVO ─────────── */
 
@@ -262,36 +233,34 @@ export class AutomationService {
 
       await this.simulateHumanBehavior(page);
 
-      console.log('✍️ [LOGIN-ALT] Escribiendo credenciales...');
-      await page.waitForSelector('#authname', { timeout: 15000 });
+      console.log('🔍 [LOGIN-ALT] Buscando campo de usuario (#authname)...');
+      const userField = await page
+        .waitForSelector('#authname', { timeout: 15000 })
+        .catch(() => null);
+
+      if (!userField) {
+        console.error('❌ [LOGIN-ALT] No se encontró el selector "#authname"');
+        await this.saveDebugSnapshot(page, 'login_alt_sin_authname');
+        return false;
+      }
+
+      console.log(`✍️ [LOGIN-ALT] Escribiendo usuario: ${user}`);
       await this.typeWithDelay(page, '#authname', user);
 
+      console.log('🔍 [LOGIN-ALT] Buscando campo de contraseña (#authpass)...');
       await page.waitForSelector('#authpass', { timeout: 8000 });
       await this.typeWithDelay(page, '#authpass', pass);
 
       console.log('🔘 [LOGIN-ALT] Presionando botón ingresar (#authbtn)...');
       await page.click('#authbtn');
 
-      // ⏳ ESPERA CRÍTICA: Esperar a que la URL cambie fuera de AuthIAM o a que cargue el DOM
-      console.log('⏳ [LOGIN-ALT] Esperando redirección desde AuthIAM...');
-      await page.waitForURL((url) => !url.href.includes('AuthIAM/Index'), {
-        timeout: 30000,
-      }).catch(() => {
-        console.log('⚠️ [LOGIN-ALT] Timeout esperando cambio de URL, verificando estado...');
-      });
+      // 🛑 CAMBIO CLAVE: Esperar autenticación y forzar navegación a ReportDetail
+      await this.randomDelay(2500, 3500);
+      console.log(`🌐 [LOGIN-ALT] Navegando explícitamente al reporte: ${this.reportUrl}`);
+      await page.goto(this.reportUrl, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {});
 
-      // Si se queda en AuthIAM (pantalla intermedia), intentar esperar a que aparezca un modal o dar tiempo extra
-      await this.randomDelay(3000, 5000);
-
-      // Verificar si hay algún botón de confirmación o "Aceptar" sesión abierta
-      const acceptBtn = await page.$('button:has-text("Aceptar"), button:has-text("Continuar"), #btnAceptar');
-      if (acceptBtn) {
-        console.log('🔘 [LOGIN-ALT] Se detectó pantalla o modal intermedio. Presionando aceptar...');
-        await acceptBtn.click();
-        await this.randomDelay(2000, 3000);
-      }
-
-      console.log(`📍 [LOGIN-ALT] URL tras autenticación completa: ${page.url()}`);
+      await this.randomDelay(2000, 3000);
+      console.log(`📍 [LOGIN-ALT] URL tras autenticación: ${page.url()}`);
 
       this.isLoggedInAlt = true;
       this.currentPageUrlAlt = page.url();
@@ -306,9 +275,6 @@ export class AutomationService {
 
   /* ─────────── REFRESH Y FECHA ─────────── */
 
-  /**
-   * Obtiene la fecha actual en formato YYYY-MM-DD según la zona horaria de Bolivia
-   */
   getTodayBolivia(): string {
     return new Intl.DateTimeFormat('en-CA', {
       timeZone: 'America/La_Paz',
@@ -320,35 +286,33 @@ export class AutomationService {
 
   private async refreshPageForLatestData(page: Page) {
     console.log('🔄 [REFRESH] Recargando la página para reiniciar estado...');
-    await page.reload({
-      waitUntil: 'domcontentloaded',
-      timeout: 25000,
-    });
+    if (!page.url().includes('ReportDetail')) {
+      await page.goto(this.reportUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    } else {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 25000 });
+    }
     await this.randomDelay(1000, 1500);
   }
 
   /**
-   * Actualiza el reporte de movimientos en la página:
-   * 1. Asigna la fecha (hoy en Bolivia o la indicada) a #startDate1
-   * 2. Hace clic en el botón "Actualizar Reporte" (#fondoreportes)
-   * 3. Espera que la consulta AJAX y la tabla DataTables terminen de redibujarse
+   * Actualiza el reporte de movimientos en la página
    */
- private async updateReportData(page: Page, targetDate?: string): Promise<boolean> {
+  private async updateReportData(page: Page, targetDate?: string): Promise<boolean> {
     const fecha = targetDate || this.getTodayBolivia();
     console.log(`📅 [REPORT-UPDATE] Actualizando reporte con fecha: ${fecha}...`);
 
     try {
-      // Si por alguna razón la URL sigue en AuthIAM, forzar espera de carga
-      if (page.url().includes('AuthIAM')) {
-        console.log('⚠️ [REPORT-UPDATE] La página aún está en la URL de autenticación. Esperando a que cargue la interfaz principal...');
-        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+      // Si por alguna razón la página no está en ReportDetail, ir directamente
+      if (!page.url().includes('ReportDetail')) {
+        console.log(`⚠️ [REPORT-UPDATE] No se está en ReportDetail (${page.url()}). Redirigiendo a ${this.reportUrl}...`);
+        await page.goto(this.reportUrl, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+        await this.randomDelay(2000, 3000);
       }
 
       console.log('🔍 [REPORT-UPDATE] Buscando campo de fecha (#startDate1)...');
       
-      // Intentar esperar el campo con un timeout de 20s
       const inputField = await page
-        .waitForSelector('#startDate1', { state: 'attached', timeout: 20000 })
+        .waitForSelector('#startDate1', { state: 'attached', timeout: 25000 })
         .catch(() => null);
 
       if (!inputField) {
@@ -357,7 +321,6 @@ export class AutomationService {
         return false;
       }
 
-      // Resto del código intacto...
       console.log(`✍️ [REPORT-UPDATE] Asignando fecha ${fecha} a #startDate1...`);
       await page.evaluate((fechaValue) => {
         const input = document.getElementById('startDate1') as HTMLInputElement;
@@ -368,15 +331,39 @@ export class AutomationService {
         }
       }, fecha);
 
-      await this.randomDelay(300, 600);
+      await this.randomDelay(500, 800);
 
-      const btnField = await page.waitForSelector('#fondoreportes', { timeout: 8000 }).catch(() => null);
-      if (!btnField) return false;
+      console.log('🔘 [REPORT-UPDATE] Buscando botón "Actualizar Reporte" (#fondoreportes)...');
+      const btnField = await page
+        .waitForSelector('#fondoreportes', { timeout: 10000 })
+        .catch(() => null);
 
+      if (!btnField) {
+        console.error('❌ [REPORT-UPDATE] No se encontró el botón "#fondoreportes"');
+        await this.saveDebugSnapshot(page, 'update_sin_fondoreportes');
+        return false;
+      }
+
+      console.log('🖱️ [REPORT-UPDATE] Clic en "#fondoreportes" para consultar movimientos...');
       await page.click('#fondoreportes');
-      await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+
+      console.log('⏳ [REPORT-UPDATE] Esperando respuesta del servidor y carga de datos...');
+      await page
+        .waitForLoadState('networkidle', { timeout: 15000 })
+        .catch(() => {
+          console.log('ℹ️ [REPORT-UPDATE] Espera de red finalizada, continuando...');
+        });
+
+      await page
+        .waitForSelector(
+          '.dataTables_processing, .blockUI, div[id*="loading"], div[class*="loading"]',
+          { state: 'hidden', timeout: 10000 },
+        )
+        .catch(() => {});
+
       await this.randomDelay(2000, 3000);
 
+      console.log('✅ [REPORT-UPDATE] Reporte actualizado exitosamente.');
       return true;
     } catch (error: any) {
       console.error('❌ [REPORT-UPDATE] Error al actualizar reporte:', error.message);
@@ -427,7 +414,6 @@ export class AutomationService {
       }
       throw error;
     } finally {
-      // Eliminar archivo después de enviar a Laravel
       await this.deleteFile(excelPath);
     }
   }
@@ -458,7 +444,6 @@ export class AutomationService {
       }
     }
 
-    // Actualizar reporte con la fecha indicada (o hoy por defecto) y pulsar #fondoreportes
     const fechaFiltro = fecha || this.getTodayBolivia();
     console.log(`🔄 [MAIN] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`);
     const updated = await this.updateReportData(this.page!, fechaFiltro);
@@ -475,9 +460,7 @@ export class AutomationService {
     if (!foundBtn) {
       console.error('❌ [MAIN] No se encontró el botón "Exportar a Excel"');
       await this.saveDebugSnapshot(this.page!, 'main_sin_boton_excel');
-      throw new Error(
-        'No se encontró el botón "Exportar a Excel". Revisa la captura en descargas/ para ver qué muestra la página.',
-      );
+      throw new Error('No se encontró el botón "Exportar a Excel".');
     }
 
     console.log('⬇️ [MAIN] Iniciando clic en exportar y esperando descarga...');
@@ -486,13 +469,9 @@ export class AutomationService {
       this.page!.click(excelBtn),
     ]);
 
-    excelPath = path.join(
-      this.downloadPath,
-      `Reporte_${Date.now()}.xlsx`,
-    );
-
+    excelPath = path.join(this.downloadPath, `Reporte_${Date.now()}.xlsx`);
     await download.saveAs(excelPath);
-    console.log(`✅ [MAIN] Archivo descargado exitosamente en: ${excelPath}`);
+    console.log(`✅ [MAIN] Archivo descargado en: ${excelPath}`);
 
     const laravelResponse = await this.sendExcelToLaravel(excelPath);
 
@@ -533,7 +512,6 @@ export class AutomationService {
       }
     }
 
-    // Actualizar reporte con la fecha indicada (o hoy por defecto) y pulsar #fondoreportes
     const fechaFiltro = fecha || this.getTodayBolivia();
     console.log(`🔄 [ALT] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`);
     const updated = await this.updateReportData(this.pageAlt!, fechaFiltro);
@@ -550,9 +528,7 @@ export class AutomationService {
     if (!foundBtn) {
       console.error('❌ [ALT] No se encontró el botón "Exportar a Excel"');
       await this.saveDebugSnapshot(this.pageAlt!, 'alt_sin_boton_excel');
-      throw new Error(
-        'No se encontró el botón "Exportar a Excel". Revisa la captura en descargas/ para ver qué muestra la página.',
-      );
+      throw new Error('No se encontró el botón "Exportar a Excel".');
     }
 
     console.log('⬇️ [ALT] Iniciando clic en exportar y esperando descarga...');
@@ -561,20 +537,15 @@ export class AutomationService {
       this.pageAlt!.click(excelBtn),
     ]);
 
-    excelPath = path.join(
-      this.downloadPath,
-      `ReporteAlt_${Date.now()}.xlsx`,
-    );
-
+    excelPath = path.join(this.downloadPath, `ReporteAlt_${Date.now()}.xlsx`);
     await download.saveAs(excelPath);
-    console.log(`✅ [ALT] Archivo descargado exitosamente en: ${excelPath}`);
+    console.log(`✅ [ALT] Archivo descargado en: ${excelPath}`);
 
     const laravelResponse = await this.sendExcelToLaravel(excelPath);
 
     return {
       success: true,
-      message:
-        'Excel descargado y enviado a Laravel exitosamente (usando credenciales alternativas)',
+      message: 'Excel descargado y enviado a Laravel exitosamente',
       excelPath,
       fechaFiltro,
       laravelResponse,
@@ -609,13 +580,10 @@ export class AutomationService {
       }
     }
 
-    // Aplicar filtro de fecha antes de descargar
     console.log(`📅 [FILTER] Aplicando filtro de fecha: ${fecha}...`);
     const filterApplied = await this.updateReportData(this.pageAlt!, fecha);
     if (!filterApplied) {
-      throw new Error(
-        `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
-      );
+      throw new Error(`No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`);
     }
 
     console.log('🔍 [FILTER] Buscando botón "Exportar a Excel"...');
@@ -627,9 +595,7 @@ export class AutomationService {
     if (!foundBtn) {
       console.error('❌ [FILTER] No se encontró el botón "Exportar a Excel"');
       await this.saveDebugSnapshot(this.pageAlt!, 'filter_sin_boton_excel');
-      throw new Error(
-        'No se encontró el botón "Exportar a Excel" tras filtrar por fecha.',
-      );
+      throw new Error('No se encontró el botón "Exportar a Excel" tras filtrar por fecha.');
     }
 
     console.log('⬇️ [FILTER] Iniciando clic en exportar y esperando descarga...');
@@ -638,11 +604,7 @@ export class AutomationService {
       this.pageAlt!.click(excelBtn),
     ]);
 
-    excelPath = path.join(
-      this.downloadPath,
-      `ReporteFilter_${Date.now()}.xlsx`,
-    );
-
+    excelPath = path.join(this.downloadPath, `ReporteFilter_${Date.now()}.xlsx`);
     await download.saveAs(excelPath);
     console.log(`✅ [FILTER] Archivo descargado exitosamente en: ${excelPath}`);
 
@@ -650,8 +612,7 @@ export class AutomationService {
 
     return {
       success: true,
-      message:
-        'Excel descargado con filtro de fecha y enviado a Laravel exitosamente',
+      message: 'Excel descargado con filtro de fecha y enviado a Laravel exitosamente',
       excelPath,
       fechaFiltro: fecha,
       laravelResponse,
