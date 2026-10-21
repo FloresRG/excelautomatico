@@ -246,6 +246,8 @@ export class AutomationService {
 
   /* ─────────── LOGIN ALTERNATIVO ─────────── */
 
+  /* ─────────── LOGIN ALTERNATIVO ─────────── */
+
   private async performLoginAlt(page: Page): Promise<boolean> {
     const user = this.getEnv('BCP_USER_ALT') || 'CajaLive114559';
     const pass = this.getEnv('BCP_PASS_ALT') || 'hXDfP-cj2w';
@@ -258,54 +260,38 @@ export class AutomationService {
         timeout: 45000,
       });
 
-      console.log(`📍 [LOGIN-ALT] URL actual: ${page.url()}`);
-      console.log(`📄 [LOGIN-ALT] Título de página: "${await page.title()}"`);
-
       await this.simulateHumanBehavior(page);
 
-      console.log('🔍 [LOGIN-ALT] Buscando campo de usuario (#authname)...');
-      const userField = await page
-        .waitForSelector('#authname', { timeout: 15000 })
-        .catch(() => null);
-
-      if (!userField) {
-        console.error('❌ [LOGIN-ALT] No se encontró el selector "#authname"');
-        await this.saveDebugSnapshot(page, 'login_alt_sin_authname');
-        return false;
-      }
-
-      console.log(`✍️ [LOGIN-ALT] Escribiendo usuario: ${user}`);
+      console.log('✍️ [LOGIN-ALT] Escribiendo credenciales...');
+      await page.waitForSelector('#authname', { timeout: 15000 });
       await this.typeWithDelay(page, '#authname', user);
 
-      console.log('🔍 [LOGIN-ALT] Buscando campo de contraseña (#authpass)...');
-      const passField = await page
-        .waitForSelector('#authpass', { timeout: 8000 })
-        .catch(() => null);
-
-      if (!passField) {
-        console.error('❌ [LOGIN-ALT] No se encontró el selector "#authpass"');
-        await this.saveDebugSnapshot(page, 'login_alt_sin_authpass');
-        return false;
-      }
-
-      console.log('✍️ [LOGIN-ALT] Escribiendo contraseña...');
+      await page.waitForSelector('#authpass', { timeout: 8000 });
       await this.typeWithDelay(page, '#authpass', pass);
 
       console.log('🔘 [LOGIN-ALT] Presionando botón ingresar (#authbtn)...');
-      await Promise.all([
-        page
-          .waitForNavigation({ waitUntil: 'networkidle', timeout: 45000 }) // <-- Cambiado de domcontentloaded a networkidle
-          .catch((err) => {
-            console.log(
-              '⚠️ [LOGIN-ALT] Navegación tardó o finalizó:',
-              err.message,
-            );
-          }),
-        page.click('#authbtn'),
-      ]);
+      await page.click('#authbtn');
 
-      await this.randomDelay(2000, 3000); // Dar un margen extra de renderizado DOM
-      console.log(`📍 [LOGIN-ALT] URL tras autenticación: ${page.url()}`);
+      // ⏳ ESPERA CRÍTICA: Esperar a que la URL cambie fuera de AuthIAM o a que cargue el DOM
+      console.log('⏳ [LOGIN-ALT] Esperando redirección desde AuthIAM...');
+      await page.waitForURL((url) => !url.href.includes('AuthIAM/Index'), {
+        timeout: 30000,
+      }).catch(() => {
+        console.log('⚠️ [LOGIN-ALT] Timeout esperando cambio de URL, verificando estado...');
+      });
+
+      // Si se queda en AuthIAM (pantalla intermedia), intentar esperar a que aparezca un modal o dar tiempo extra
+      await this.randomDelay(3000, 5000);
+
+      // Verificar si hay algún botón de confirmación o "Aceptar" sesión abierta
+      const acceptBtn = await page.$('button:has-text("Aceptar"), button:has-text("Continuar"), #btnAceptar');
+      if (acceptBtn) {
+        console.log('🔘 [LOGIN-ALT] Se detectó pantalla o modal intermedio. Presionando aceptar...');
+        await acceptBtn.click();
+        await this.randomDelay(2000, 3000);
+      }
+
+      console.log(`📍 [LOGIN-ALT] URL tras autenticación completa: ${page.url()}`);
 
       this.isLoggedInAlt = true;
       this.currentPageUrlAlt = page.url();
@@ -347,32 +333,34 @@ export class AutomationService {
    * 2. Hace clic en el botón "Actualizar Reporte" (#fondoreportes)
    * 3. Espera que la consulta AJAX y la tabla DataTables terminen de redibujarse
    */
-  private async updateReportData(page: Page, targetDate?: string): Promise<boolean> {
+ private async updateReportData(page: Page, targetDate?: string): Promise<boolean> {
     const fecha = targetDate || this.getTodayBolivia();
     console.log(`📅 [REPORT-UPDATE] Actualizando reporte con fecha: ${fecha}...`);
 
     try {
-      // Espera activa a que el DOM o la URL cambien desde la pantalla de login
-      await page.waitForLoadState('networkidle').catch(() => {});
+      // Si por alguna razón la URL sigue en AuthIAM, forzar espera de carga
+      if (page.url().includes('AuthIAM')) {
+        console.log('⚠️ [REPORT-UPDATE] La página aún está en la URL de autenticación. Esperando a que cargue la interfaz principal...');
+        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+      }
 
       console.log('🔍 [REPORT-UPDATE] Buscando campo de fecha (#startDate1)...');
       
-      // Aumentamos el timeout a 25 segundos para compensar la latencia del VPS
+      // Intentar esperar el campo con un timeout de 20s
       const inputField = await page
-        .waitForSelector('#startDate1', { state: 'attached', timeout: 25000 })
+        .waitForSelector('#startDate1', { state: 'attached', timeout: 20000 })
         .catch(() => null);
 
       if (!inputField) {
-        console.error('❌ [REPORT-UPDATE] No se encontró el campo "#startDate1"');
+        console.error(`❌ [REPORT-UPDATE] No se encontró "#startDate1". URL actual: ${page.url()}`);
         await this.saveDebugSnapshot(page, 'update_sin_startDate1');
         return false;
       }
 
+      // Resto del código intacto...
       console.log(`✍️ [REPORT-UPDATE] Asignando fecha ${fecha} a #startDate1...`);
       await page.evaluate((fechaValue) => {
-        const input = document.getElementById(
-          'startDate1',
-        ) as HTMLInputElement;
+        const input = document.getElementById('startDate1') as HTMLInputElement;
         if (input) {
           input.value = fechaValue;
           input.dispatchEvent(new Event('change', { bubbles: true }));
@@ -380,34 +368,15 @@ export class AutomationService {
         }
       }, fecha);
 
-      await this.randomDelay(500, 1000);
+      await this.randomDelay(300, 600);
 
-      console.log('🔘 [REPORT-UPDATE] Buscando botón "Actualizar Reporte" (#fondoreportes)...');
-      const btnField = await page
-        .waitForSelector('#fondoreportes', { timeout: 10000 })
-        .catch(() => null);
+      const btnField = await page.waitForSelector('#fondoreportes', { timeout: 8000 }).catch(() => null);
+      if (!btnField) return false;
 
-      if (!btnField) {
-        console.error('❌ [REPORT-UPDATE] No se encontró el botón "#fondoreportes"');
-        await this.saveDebugSnapshot(page, 'update_sin_fondoreportes');
-        return false;
-      }
-
-      console.log('🖱️ [REPORT-UPDATE] Clic en "#fondoreportes" para consultar últimos movimientos...');
       await page.click('#fondoreportes');
-
-      // Esperar a que la petición de red termine (AJAX del BCP)
-      console.log('⏳ [REPORT-UPDATE] Esperando respuesta del servidor y carga de datos...');
-      await page
-        .waitForLoadState('networkidle', { timeout: 20000 })
-        .catch(() => {
-          console.log('ℹ️ [REPORT-UPDATE] Espera de red finalizada, continuando...');
-        });
-
-      // Retardo de seguridad para asegurar que DataTables terminó de procesar
+      await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
       await this.randomDelay(2000, 3000);
 
-      console.log('✅ [REPORT-UPDATE] Reporte actualizado exitosamente con los últimos datos.');
       return true;
     } catch (error: any) {
       console.error('❌ [REPORT-UPDATE] Error al actualizar reporte:', error.message);
