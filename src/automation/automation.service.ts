@@ -226,46 +226,68 @@ export class AutomationService {
 
     try {
       console.log(`🌐 [LOGIN-ALT] Navegando a ${loginUrl}...`);
-      await page.goto(loginUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 45000,
-      });
+      await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
       await this.simulateHumanBehavior(page);
 
-      console.log('🔍 [LOGIN-ALT] Buscando campo de usuario (#authname)...');
-      const userField = await page
-        .waitForSelector('#authname', { timeout: 15000 })
-        .catch(() => null);
-
-      if (!userField) {
-        console.error('❌ [LOGIN-ALT] No se encontró el selector "#authname"');
-        await this.saveDebugSnapshot(page, 'login_alt_sin_authname');
-        return false;
-      }
-
-      console.log(`✍️ [LOGIN-ALT] Escribiendo usuario: ${user}`);
+      console.log('✍️ [LOGIN-ALT] Escribiendo credenciales...');
+      await page.waitForSelector('#authname', { timeout: 15000 });
       await this.typeWithDelay(page, '#authname', user);
 
-      console.log('🔍 [LOGIN-ALT] Buscando campo de contraseña (#authpass)...');
       await page.waitForSelector('#authpass', { timeout: 8000 });
       await this.typeWithDelay(page, '#authpass', pass);
 
       console.log('🔘 [LOGIN-ALT] Presionando botón ingresar (#authbtn)...');
-      await page.click('#authbtn');
+      
+      await Promise.all([
+        page.click('#authbtn'),
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {}),
+      ]);
 
-      // 🛑 CAMBIO CLAVE: Esperar autenticación y forzar navegación a ReportDetail
       await this.randomDelay(2500, 3500);
-      console.log(`🌐 [LOGIN-ALT] Navegando explícitamente al reporte: ${this.reportUrl}`);
+      let currentUrl = page.url();
+      console.log(`📍 [LOGIN-ALT] URL tras hacer clic en login: ${currentUrl}`);
+
+      // 🛑 MANEJO DE SESIÓN EXPIRADA / ACTIVA EN OTRO DISPOSITIVO
+      if (currentUrl.includes('ExpiredSession') || currentUrl.includes('active=True')) {
+        console.log('⚠️ [LOGIN-ALT] Se detectó sesión activa en otro dispositivo. Confirmando re-inicio de sesión...');
+
+        // Intentar hacer clic en el botón que el BCP muestra para continuar ("Continuar", "Aceptar", "Ingresar")
+        const continueBtn = await page.$(
+          'button:has-text("Continuar"), button:has-text("Aceptar"), input[type="submit"], #btnAceptar, a:has-text("Continuar")'
+        );
+
+        if (continueBtn) {
+          console.log('🔘 [LOGIN-ALT] Clic en botón para cerrar la sesión anterior...');
+          await Promise.all([
+            continueBtn.click(),
+            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {}),
+          ]);
+          await this.randomDelay(3000, 4000);
+        } else {
+          // Si no hay botón explícito, recargar y reintentar el flujo de login
+          console.log('🔄 [LOGIN-ALT] Reintentando login tras limpiar sesión...');
+          await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+          await page.waitForSelector('#authname', { timeout: 10000 });
+          await this.typeWithDelay(page, '#authname', user);
+          await this.typeWithDelay(page, '#authpass', pass);
+          await page.click('#authbtn');
+          await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {});
+          await this.randomDelay(3000, 4000);
+        }
+      }
+
+      // Una vez superada la validación de sesión activa, ir al ReportDetail
+      console.log(`🌐 [LOGIN-ALT] Navegando a la vista de reportes: ${this.reportUrl}`);
       await page.goto(this.reportUrl, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {});
-
       await this.randomDelay(2000, 3000);
-      console.log(`📍 [LOGIN-ALT] URL tras autenticación: ${page.url()}`);
 
-      this.isLoggedInAlt = true;
+      console.log(`📍 [LOGIN-ALT] URL final tras autenticación: ${page.url()}`);
+
+      this.isLoggedInAlt = page.url().includes('ReportDetail');
       this.currentPageUrlAlt = page.url();
 
-      return true;
+      return this.isLoggedInAlt;
     } catch (error: any) {
       console.error('❌ [LOGIN-ALT] Error durante el proceso de login:', error.message);
       await this.saveDebugSnapshot(page, 'login_alt_error');
@@ -302,9 +324,9 @@ export class AutomationService {
     console.log(`📅 [REPORT-UPDATE] Actualizando reporte con fecha: ${fecha}...`);
 
     try {
-      // Si por alguna razón la página no está en ReportDetail, ir directamente
+      // Re-verificar la URL antes de buscar controles
       if (!page.url().includes('ReportDetail')) {
-        console.log(`⚠️ [REPORT-UPDATE] No se está en ReportDetail (${page.url()}). Redirigiendo a ${this.reportUrl}...`);
+        console.log(`⚠️ [REPORT-UPDATE] No se está en ReportDetail (${page.url()}). Intentando navegar...`);
         await page.goto(this.reportUrl, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
         await this.randomDelay(2000, 3000);
       }
@@ -312,7 +334,7 @@ export class AutomationService {
       console.log('🔍 [REPORT-UPDATE] Buscando campo de fecha (#startDate1)...');
       
       const inputField = await page
-        .waitForSelector('#startDate1', { state: 'attached', timeout: 25000 })
+        .waitForSelector('#startDate1', { state: 'attached', timeout: 20000 })
         .catch(() => null);
 
       if (!inputField) {
@@ -348,19 +370,7 @@ export class AutomationService {
       await page.click('#fondoreportes');
 
       console.log('⏳ [REPORT-UPDATE] Esperando respuesta del servidor y carga de datos...');
-      await page
-        .waitForLoadState('networkidle', { timeout: 15000 })
-        .catch(() => {
-          console.log('ℹ️ [REPORT-UPDATE] Espera de red finalizada, continuando...');
-        });
-
-      await page
-        .waitForSelector(
-          '.dataTables_processing, .blockUI, div[id*="loading"], div[class*="loading"]',
-          { state: 'hidden', timeout: 10000 },
-        )
-        .catch(() => {});
-
+      await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
       await this.randomDelay(2000, 3000);
 
       console.log('✅ [REPORT-UPDATE] Reporte actualizado exitosamente.');
