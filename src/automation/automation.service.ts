@@ -542,7 +542,7 @@ export class AutomationService {
 
   /* ─────────── MAIN PRINCIPAL ─────────── */
 
-  async downloadExcelAndSendToLaravel(fecha?: string) {
+  async downloadExcelAndSendToLaravel(fecha?: string, skipLaravel: boolean = false) {
     let excelPath = '';
 
     if (!this.browser || !this.page) {
@@ -604,6 +604,19 @@ export class AutomationService {
     await download.saveAs(excelPath);
     console.log(`✅ [MAIN] Archivo descargado exitosamente en: ${excelPath}`);
 
+    if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
+      console.log(`💾 [MAIN] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`);
+      return {
+        success: true,
+        message: 'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
+        excelPath,
+        fechaFiltro,
+        laravelResponse: { skipped: true },
+        timestamp: new Date().toISOString(),
+        reusedSession: this.isLoggedIn,
+      };
+    }
+
     const laravelResponse = await this.sendExcelToLaravel(excelPath);
 
     return {
@@ -619,7 +632,7 @@ export class AutomationService {
 
   /* ─────────── MAIN ALTERNATIVO ─────────── */
 
-  async downloadExcelAndSendToLaravelAlt(fecha?: string) {
+  async downloadExcelAndSendToLaravelAlt(fecha?: string, skipLaravel: boolean = false) {
     let excelPath = '';
 
     if (!this.browserAlt || !this.pageAlt) {
@@ -681,6 +694,19 @@ export class AutomationService {
     await download.saveAs(excelPath);
     console.log(`✅ [ALT] Archivo descargado exitosamente en: ${excelPath}`);
 
+    if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
+      console.log(`💾 [ALT] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`);
+      return {
+        success: true,
+        message: 'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
+        excelPath,
+        fechaFiltro,
+        laravelResponse: { skipped: true },
+        timestamp: new Date().toISOString(),
+        reusedSession: this.isLoggedInAlt,
+      };
+    }
+
     const laravelResponse = await this.sendExcelToLaravel(excelPath);
 
     return {
@@ -696,7 +722,7 @@ export class AutomationService {
 
   /* ─────────── MAIN CON FILTRO FECHA (CAJALIVE) ─────────── */
 
-  async downloadExcelWithDateFilter(fecha: string) {
+  async downloadExcelWithDateFilter(fecha: string, skipLaravel: boolean = false) {
     let excelPath = '';
 
     if (!this.browserAlt || !this.pageAlt) {
@@ -758,6 +784,19 @@ export class AutomationService {
     excelPath = path.join(this.downloadPath, `ReporteFilter_${Date.now()}.xlsx`);
     await download.saveAs(excelPath);
     console.log(`✅ [FILTER] Archivo descargado exitosamente en: ${excelPath}`);
+
+    if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
+      console.log(`💾 [FILTER] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`);
+      return {
+        success: true,
+        message: 'Excel descargado con filtro de fecha (modo prueba: no enviado a Laravel)',
+        excelPath,
+        fechaFiltro: fecha,
+        laravelResponse: { skipped: true },
+        timestamp: new Date().toISOString(),
+        reusedSession: this.isLoggedInAlt,
+      };
+    }
 
     const laravelResponse = await this.sendExcelToLaravel(excelPath);
 
