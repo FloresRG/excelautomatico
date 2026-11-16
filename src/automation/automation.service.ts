@@ -127,11 +127,13 @@ export class AutomationService {
         ? headlessClean === 'true' || headlessClean === '1'
         : true;
 
-    // Si estamos en un servidor Linux sin servidor gráfico ($DISPLAY), forzar headless para evitar crash de Playwright
-    if (!isHeadless && process.platform === 'linux' && !process.env.DISPLAY) {
-      console.warn(
-        '⚠️ [BROWSER] Se detectó servidor Linux sin $DISPLAY. Forzando modo HEADLESS para evitar error "Missing X server".',
-      );
+    // En Linux (servidor VPS de producción), forzar SIEMPRE headless para evitar que Chromium intente abrir interfaz gráfica y crashee con "Missing X server"
+    if (process.platform === 'linux') {
+      if (!isHeadless) {
+        console.warn(
+          '⚠️ [BROWSER] Entorno Linux detectado: Forzando modo HEADLESS (en servidor no hay pantalla gráfica).',
+        );
+      }
       isHeadless = true;
     }
 
