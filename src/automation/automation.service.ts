@@ -116,8 +116,25 @@ export class AutomationService {
   /* ─────────── INIT BROWSER ─────────── */
 
   private async initializeBrowser(): Promise<{ browser: Browser; page: Page }> {
-    const headlessEnv = this.getEnv('HEADLESS');
-    const isHeadless = headlessEnv !== undefined ? headlessEnv === 'true' : true;
+    const rawHeadless = this.getEnv('HEADLESS');
+    const headlessClean =
+      rawHeadless !== undefined
+        ? rawHeadless.trim().replace(/^['"]|['"]$/g, '').toLowerCase()
+        : undefined;
+
+    let isHeadless =
+      headlessClean !== undefined
+        ? headlessClean === 'true' || headlessClean === '1'
+        : true;
+
+    // Si estamos en un servidor Linux sin servidor gráfico ($DISPLAY), forzar headless para evitar crash de Playwright
+    if (!isHeadless && process.platform === 'linux' && !process.env.DISPLAY) {
+      console.warn(
+        '⚠️ [BROWSER] Se detectó servidor Linux sin $DISPLAY. Forzando modo HEADLESS para evitar error "Missing X server".',
+      );
+      isHeadless = true;
+    }
+
     console.log(
       `🚀 [BROWSER] Iniciando Chromium en modo: ${
         isHeadless ? 'HEADLESS (segundo plano)' : 'VISIBLE (en tu pantalla con slowMo 400ms)'
