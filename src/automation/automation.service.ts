@@ -110,9 +110,31 @@ export class AutomationService {
 
   private async isAlreadyLoggedIn(page: Page): Promise<boolean> {
     try {
-      const currentUrl = page.url();
+      if (!page || page.isClosed()) return false;
+      const currentUrl = page.url().toLowerCase();
+
+      // Si está en la pantalla de autenticación IAM o login, no está logueado
+      if (currentUrl.includes('authiam') || currentUrl.includes('/index')) {
+        return false;
+      }
+
+      // Si la URL es ReportDetail o Dashboard, la sesión ya está dentro del portal
+      if (
+        currentUrl.includes('reportdetail') ||
+        currentUrl.includes('dashboard')
+      ) {
+        return true;
+      }
+
+      // Comprobar elementos típicos del portal activo
       const hasExportBtn = (await page.$(this.excelBtnSelector)) !== null;
-      return hasExportBtn || currentUrl.toLowerCase().includes('dashboard');
+      const hasReportControls =
+        (await page.$('#startDate1, #fondoreportes')) !== null;
+      return (
+        hasExportBtn ||
+        hasReportControls ||
+        (currentUrl.includes('multiplica') && !currentUrl.includes('authiam'))
+      );
     } catch {
       return false;
     }
@@ -822,47 +844,167 @@ export class AutomationService {
     }
   }
 
+  /* ─────────── GESTIÓN DE SESIÓN ROBUSTA (AUTO-RECUPERACIÓN) ─────────── */
+
+  private isSessionAlive(browser: Browser | null, page: Page | null): boolean {
+    if (!browser || !page) return false;
+    try {
+      if (!browser.isConnected()) return false;
+      if (page.isClosed()) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private setSessionVars(
+    accountType: 'MAIN' | 'ALT' | 'CINEBOL',
+    browser: Browser | null,
+    page: Page | null,
+    isLoggedIn: boolean,
+  ) {
+    if (accountType === 'MAIN') {
+      this.browser = browser;
+      this.page = page;
+      this.isLoggedIn = isLoggedIn;
+      if (page && !page.isClosed()) {
+        try {
+          this.currentPageUrl = page.url();
+        } catch {
+          this.currentPageUrl = '';
+        }
+      }
+    } else if (accountType === 'ALT') {
+      this.browserAlt = browser;
+      this.pageAlt = page;
+      this.isLoggedInAlt = isLoggedIn;
+      if (page && !page.isClosed()) {
+        try {
+          this.currentPageUrlAlt = page.url();
+        } catch {
+          this.currentPageUrlAlt = '';
+        }
+      }
+    } else {
+      this.browserCinebol = browser;
+      this.pageCinebol = page;
+      this.isLoggedInCinebol = isLoggedIn;
+      if (page && !page.isClosed()) {
+        try {
+          this.currentPageUrlCinebol = page.url();
+        } catch {
+          this.currentPageUrlCinebol = '';
+        }
+      }
+    }
+  }
+
+  private async performLoginByType(
+    accountType: 'MAIN' | 'ALT' | 'CINEBOL',
+    page: Page,
+  ): Promise<boolean> {
+    if (accountType === 'MAIN') {
+      return this.performLogin(page);
+    } else if (accountType === 'ALT') {
+      return this.performLoginAlt(page);
+    } else {
+      return this.performLoginCinebol(page);
+    }
+  }
+
+  private async ensureSession(
+    accountType: 'MAIN' | 'ALT' | 'CINEBOL',
+  ): Promise<{ browser: Browser; page: Page }> {
+    let browser: Browser | null = null;
+    let page: Page | null = null;
+
+    if (accountType === 'MAIN') {
+      browser = this.browser;
+      page = this.page;
+    } else if (accountType === 'ALT') {
+      browser = this.browserAlt;
+      page = this.pageAlt;
+    } else {
+      browser = this.browserCinebol;
+      page = this.pageCinebol;
+    }
+
+    // 1. Si no existe o se cerró la página/navegador, iniciar una nueva instancia limpia
+    if (!this.isSessionAlive(browser, page)) {
+      console.log(`🆕 [${accountType}] Iniciando nueva sesión del navegador...`);
+      if (browser) {
+        await browser.close().catch(() => {});
+      }
+      const init = await this.initializeBrowser();
+      browser = init.browser;
+      page = init.page;
+      this.setSessionVars(accountType, browser, page, false);
+
+      const loginOk = await this.performLoginByType(accountType, page);
+      if (!loginOk) {
+        await browser.close().catch(() => {});
+        this.setSessionVars(accountType, null, null, false);
+        throw new Error(`Falló el login con credenciales de ${accountType}`);
+      }
+      this.setSessionVars(accountType, browser, page, true);
+      return { browser, page };
+    }
+
+    // 2. Si el navegador está vivo en memoria, verificar si la sesión sigue activa dentro del portal
+    console.log(`♻️ [${accountType}] Reutilizando navegador existente...`);
+    const loggedIn = await this.isAlreadyLoggedIn(page!);
+
+    if (!loggedIn) {
+      console.log(`🔑 [${accountType}] Sesión no iniciada o vencida. Realizando login...`);
+      try {
+        const loginOk = await this.performLoginByType(accountType, page!);
+        if (!loginOk) {
+          throw new Error('Login no completado');
+        }
+        this.setSessionVars(accountType, browser, page, true);
+      } catch (err: any) {
+        console.warn(`⚠️ [${accountType}] No se pudo reutilizar la pestaña existente (${err.message}). Abriendo navegador limpio...`);
+        await browser!.close().catch(() => {});
+        const init = await this.initializeBrowser();
+        browser = init.browser;
+        page = init.page;
+        this.setSessionVars(accountType, browser, page, false);
+
+        const retryOk = await this.performLoginByType(accountType, page);
+        if (!retryOk) {
+          await browser.close().catch(() => {});
+          this.setSessionVars(accountType, null, null, false);
+          throw new Error(`Falló el login con credenciales de ${accountType}`);
+        }
+        this.setSessionVars(accountType, browser, page, true);
+      }
+    } else {
+      await this.refreshPageForLatestData(page!);
+    }
+
+    return { browser: browser!, page: page! };
+  }
+
   /* ─────────── MAIN PRINCIPAL ─────────── */
 
   async downloadExcelAndSendToLaravel(
     fecha?: string,
     skipLaravel: boolean = false,
   ) {
-    if (!this.browser || !this.page) {
-      console.log('🆕 [MAIN] Iniciando nueva sesión del navegador...');
-      const init = await this.initializeBrowser();
-      this.browser = init.browser;
-      this.page = init.page;
-
-      if (!(await this.performLogin(this.page))) {
-        throw new Error('Falló el login con credenciales principales');
-      }
-    } else {
-      console.log('♻️ [MAIN] Reutilizando navegador existente...');
-      if (!(await this.isAlreadyLoggedIn(this.page))) {
-        console.log(
-          '🔑 [MAIN] Sesión no iniciada o vencida. Realizando login...',
-        );
-        if (!(await this.performLogin(this.page))) {
-          throw new Error('Falló el login con credenciales principales');
-        }
-      } else {
-        await this.refreshPageForLatestData(this.page);
-      }
-    }
+    const { page } = await this.ensureSession('MAIN');
 
     const fechaFiltro = fecha || this.getTodayBolivia();
     console.log(
       `🔄 [MAIN] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
     );
-    const updated = await this.updateReportData(this.page, fechaFiltro);
+    const updated = await this.updateReportData(page, fechaFiltro);
     if (!updated) {
       console.warn(
         '⚠️ [MAIN] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
       );
     }
 
-    const excelPath = await this.triggerExcelDownload(this.page, 'Reporte');
+    const excelPath = await this.triggerExcelDownload(page, 'Reporte');
 
     if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
       console.log(
@@ -899,34 +1041,13 @@ export class AutomationService {
     fecha?: string,
     skipLaravel: boolean = false,
   ) {
-    if (!this.browserAlt || !this.pageAlt) {
-      console.log('🆕 [ALT] Iniciando nueva sesión del navegador (Alt)...');
-      const init = await this.initializeBrowser();
-      this.browserAlt = init.browser;
-      this.pageAlt = init.page;
-
-      if (!(await this.performLoginAlt(this.pageAlt))) {
-        throw new Error('Falló el login con credenciales alternativas');
-      }
-    } else {
-      console.log('♻️ [ALT] Reutilizando navegador existente (Alt)...');
-      if (!(await this.isAlreadyLoggedIn(this.pageAlt))) {
-        console.log(
-          '🔑 [ALT] Sesión no iniciada o vencida. Realizando login...',
-        );
-        if (!(await this.performLoginAlt(this.pageAlt))) {
-          throw new Error('Falló el login con credenciales alternativas');
-        }
-      } else {
-        await this.refreshPageForLatestData(this.pageAlt);
-      }
-    }
+    const { page } = await this.ensureSession('ALT');
 
     const fechaFiltro = fecha || this.getTodayBolivia();
     console.log(
       `🔄 [ALT] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
     );
-    const updated = await this.updateReportData(this.pageAlt, fechaFiltro);
+    const updated = await this.updateReportData(page, fechaFiltro);
     if (!updated) {
       console.warn(
         '⚠️ [ALT] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
@@ -934,7 +1055,7 @@ export class AutomationService {
     }
 
     const excelPath = await this.triggerExcelDownload(
-      this.pageAlt,
+      page,
       'ReporteAlt',
     );
 
@@ -974,31 +1095,10 @@ export class AutomationService {
     fecha: string,
     skipLaravel: boolean = false,
   ) {
-    if (!this.browserAlt || !this.pageAlt) {
-      console.log('🆕 [FILTER] Iniciando nueva sesión con filtro de fecha...');
-      const init = await this.initializeBrowser();
-      this.browserAlt = init.browser;
-      this.pageAlt = init.page;
-
-      if (!(await this.performLoginAlt(this.pageAlt))) {
-        throw new Error('Falló el login con credenciales alternativas');
-      }
-    } else {
-      console.log('♻️ [FILTER] Reutilizando navegador existente...');
-      if (!(await this.isAlreadyLoggedIn(this.pageAlt))) {
-        console.log(
-          '🔑 [FILTER] Sesión no iniciada o vencida. Realizando login...',
-        );
-        if (!(await this.performLoginAlt(this.pageAlt))) {
-          throw new Error('Falló el login con credenciales alternativas');
-        }
-      } else {
-        await this.refreshPageForLatestData(this.pageAlt);
-      }
-    }
+    const { page } = await this.ensureSession('ALT');
 
     console.log(`📅 [FILTER] Aplicando filtro de fecha: ${fecha}...`);
-    const filterApplied = await this.updateReportData(this.pageAlt, fecha);
+    const filterApplied = await this.updateReportData(page, fecha);
     if (!filterApplied) {
       throw new Error(
         `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
@@ -1006,7 +1106,7 @@ export class AutomationService {
     }
 
     const excelPath = await this.triggerExcelDownload(
-      this.pageAlt,
+      page,
       'ReporteFilter',
     );
 
@@ -1046,36 +1146,13 @@ export class AutomationService {
     fecha?: string,
     skipLaravel: boolean = false,
   ) {
-    if (!this.browserCinebol || !this.pageCinebol) {
-      console.log(
-        '🆕 [CINEBOL] Iniciando nueva sesión del navegador (Cinebol)...',
-      );
-      const init = await this.initializeBrowser();
-      this.browserCinebol = init.browser;
-      this.pageCinebol = init.page;
-
-      if (!(await this.performLoginCinebol(this.pageCinebol))) {
-        throw new Error('Falló el login con credenciales de Cinebol');
-      }
-    } else {
-      console.log('♻️ [CINEBOL] Reutilizando navegador existente (Cinebol)...');
-      if (!(await this.isAlreadyLoggedIn(this.pageCinebol))) {
-        console.log(
-          '🔑 [CINEBOL] Sesión no iniciada o vencida. Realizando login...',
-        );
-        if (!(await this.performLoginCinebol(this.pageCinebol))) {
-          throw new Error('Falló el login con credenciales de Cinebol');
-        }
-      } else {
-        await this.refreshPageForLatestData(this.pageCinebol);
-      }
-    }
+    const { page } = await this.ensureSession('CINEBOL');
 
     const fechaFiltro = fecha || this.getTodayBolivia();
     console.log(
       `🔄 [CINEBOL] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
     );
-    const updated = await this.updateReportData(this.pageCinebol, fechaFiltro);
+    const updated = await this.updateReportData(page, fechaFiltro);
     if (!updated) {
       console.warn(
         '⚠️ [CINEBOL] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
@@ -1083,7 +1160,7 @@ export class AutomationService {
     }
 
     const excelPath = await this.triggerExcelDownload(
-      this.pageCinebol,
+      page,
       'ReporteCinebol',
     );
 
@@ -1123,33 +1200,10 @@ export class AutomationService {
     fecha: string,
     skipLaravel: boolean = false,
   ) {
-    if (!this.browserCinebol || !this.pageCinebol) {
-      console.log(
-        '🆕 [FILTER-CINEBOL] Iniciando nueva sesión con filtro de fecha...',
-      );
-      const init = await this.initializeBrowser();
-      this.browserCinebol = init.browser;
-      this.pageCinebol = init.page;
-
-      if (!(await this.performLoginCinebol(this.pageCinebol))) {
-        throw new Error('Falló el login con credenciales de Cinebol');
-      }
-    } else {
-      console.log('♻️ [FILTER-CINEBOL] Reutilizando navegador existente...');
-      if (!(await this.isAlreadyLoggedIn(this.pageCinebol))) {
-        console.log(
-          '🔑 [FILTER-CINEBOL] Sesión no iniciada o vencida. Realizando login...',
-        );
-        if (!(await this.performLoginCinebol(this.pageCinebol))) {
-          throw new Error('Falló el login con credenciales de Cinebol');
-        }
-      } else {
-        await this.refreshPageForLatestData(this.pageCinebol);
-      }
-    }
+    const { page } = await this.ensureSession('CINEBOL');
 
     console.log(`📅 [FILTER-CINEBOL] Aplicando filtro de fecha: ${fecha}...`);
-    const filterApplied = await this.updateReportData(this.pageCinebol, fecha);
+    const filterApplied = await this.updateReportData(page, fecha);
     if (!filterApplied) {
       throw new Error(
         `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
@@ -1157,7 +1211,7 @@ export class AutomationService {
     }
 
     const excelPath = await this.triggerExcelDownload(
-      this.pageCinebol,
+      page,
       'ReporteFilterCinebol',
     );
 
