@@ -23,7 +23,7 @@ async function runVisualTest() {
   const app = await NestFactory.createApplicationContext(AppModule);
   const automationService = app.get(AutomationService);
 
-  const testType = process.argv[2] || 'all'; // 'all', 'main', 'alt', 'filter'
+  const testType = process.argv[2] || 'all'; // 'all', 'main', 'alt', 'cinebol', 'filter'
   const results: TestResult[] = [];
 
   try {
@@ -67,11 +67,31 @@ async function runVisualTest() {
       await automationService.closeBrowser();
     }
 
-    // ────────── TEST 3: FLUJO CON FILTRO DE FECHA ──────────
+    // ────────── TEST 3: FLUJO CINEBOL ──────────
+    if (testType === 'all' || testType === 'cinebol') {
+      console.log('\n====================================================');
+      console.log('▶️ [PRUEBA 3] Flujo Cinebol (Usuario: CajaCinebol172131)');
+      console.log('====================================================');
+      try {
+        const result = await automationService.downloadExcelAndSendToLaravelCinebol(undefined, true);
+        console.log('🎉 [PRUEBA 3] Éxito:', result.message);
+        console.log(`📁 Archivo generado: ${result.excelPath}`);
+        results.push({ name: 'Flujo Cinebol (CajaCinebol)', success: true, file: result.excelPath });
+      } catch (err: any) {
+        console.error('❌ [PRUEBA 3] Error en Flujo Cinebol:', err.message);
+        results.push({ name: 'Flujo Cinebol (CajaCinebol)', success: false, error: err.message });
+      }
+
+      console.log('⏳ Pausa de 5 segundos para visualización...');
+      await new Promise((r) => setTimeout(r, 5000));
+      await automationService.closeBrowser();
+    }
+
+    // ────────── TEST 4: FLUJO CON FILTRO DE FECHA ──────────
     if (testType === 'all' || testType === 'filter') {
       const hoy = automationService.getTodayBolivia();
       console.log('\n====================================================');
-      console.log(`▶️ [PRUEBA 3/3] Flujo con Filtro de Fecha (${hoy}) (CajaLive)`);
+      console.log(`▶️ [PRUEBA 4] Flujo con Filtro de Fecha (${hoy}) (CajaLive)`);
       console.log('====================================================');
       try {
         const result = await automationService.downloadExcelWithDateFilter(hoy, true);

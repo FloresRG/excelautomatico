@@ -31,6 +31,12 @@ export class AutomationService {
   private isLoggedInAlt = false;
   private currentPageUrlAlt = '';
 
+  // Variables para la sesión Cinebol
+  private browserCinebol: Browser | null = null;
+  private pageCinebol: Page | null = null;
+  private isLoggedInCinebol = false;
+  private currentPageUrlCinebol = '';
+
   constructor(@Optional() private readonly configService?: ConfigService) {
     const customDownloadPath = this.getEnv('DOWNLOAD_PATH');
     this.downloadPath = customDownloadPath
@@ -423,6 +429,101 @@ export class AutomationService {
     } catch (error: any) {
       console.error('❌ [LOGIN-ALT] Error durante el proceso de login:', error.message);
       await this.saveDebugSnapshot(page, 'login_alt_error');
+      return false;
+    }
+  }
+
+  /* ─────────── LOGIN CINEBOL ─────────── */
+
+  private async performLoginCinebol(page: Page): Promise<boolean> {
+    const user = this.getEnv('BCP_USER_CINEBOL') || 'CajaCinebol172131';
+    const pass = this.getEnv('BCP_PASS_CINEBOL') || '2gXlo-BnBu';
+    const loginUrl = 'https://apppro.bcp.com.bo/Multiplica/AuthIAM/Index';
+
+    try {
+      console.log(`🌐 [LOGIN-CINEBOL] Navegando a ${loginUrl}...`);
+      await page.goto(loginUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 45000,
+      });
+
+      console.log(`📍 [LOGIN-CINEBOL] URL actual: ${page.url()}`);
+      console.log(`📄 [LOGIN-CINEBOL] Título de página: "${await page.title()}"`);
+
+      await this.simulateHumanBehavior(page);
+
+      console.log('🔍 [LOGIN-CINEBOL] Buscando campo de usuario (#authname)...');
+      const userField = await page
+        .waitForSelector('#authname', { timeout: 15000 })
+        .catch(() => null);
+
+      if (!userField) {
+        console.error('❌ [LOGIN-CINEBOL] No se encontró el selector "#authname"');
+        await this.saveDebugSnapshot(page, 'login_cinebol_sin_authname');
+        return false;
+      }
+
+      console.log(`✍️ [LOGIN-CINEBOL] Escribiendo usuario: ${user}`);
+      await this.typeWithDelay(page, '#authname', user);
+
+      console.log('🔍 [LOGIN-CINEBOL] Buscando campo de contraseña (#authpass)...');
+      const passField = await page
+        .waitForSelector('#authpass', { timeout: 8000 })
+        .catch(() => null);
+
+      if (!passField) {
+        console.error('❌ [LOGIN-CINEBOL] No se encontró el selector "#authpass"');
+        await this.saveDebugSnapshot(page, 'login_cinebol_sin_authpass');
+        return false;
+      }
+
+      console.log('✍️ [LOGIN-CINEBOL] Escribiendo contraseña...');
+      await this.typeWithDelay(page, '#authpass', pass);
+
+      console.log('🖱️ [LOGIN-CINEBOL] Buscando botón ingresar (#authbtn)...');
+      const btnField = await page
+        .waitForSelector('#authbtn', { timeout: 8000 })
+        .catch(() => null);
+
+      if (!btnField) {
+        console.error('❌ [LOGIN-CINEBOL] No se encontró el botón "#authbtn"');
+        await this.saveDebugSnapshot(page, 'login_cinebol_sin_authbtn');
+        return false;
+      }
+
+      // 👈 Pausa de seguridad antes del clic
+      await this.randomDelay(1000, 1500);
+
+      console.log('🔘 [LOGIN-CINEBOL] Presionando botón de ingreso (#authbtn)...');
+      await Promise.all([
+        page
+          .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 35000 })
+          .catch((err) => {
+            console.log(
+              '⚠️ [LOGIN-CINEBOL] Navegación tardó o finalizó:',
+              err.message,
+            );
+          }),
+        page.click('#authbtn'),
+      ]);
+
+      await this.randomDelay(1500, 2500);
+      
+      const loginSuccess = await this.handleLoginError(page, pass);
+      if (!loginSuccess) {
+        console.error('❌ [LOGIN-CINEBOL] No se pudo completar el login después de reintentar');
+        return false;
+      }
+
+      console.log(`📍 [LOGIN-CINEBOL] URL tras autenticación: ${page.url()}`);
+
+      this.isLoggedInCinebol = true;
+      this.currentPageUrlCinebol = page.url();
+
+      return true;
+    } catch (error: any) {
+      console.error('❌ [LOGIN-CINEBOL] Error durante el proceso de login:', error.message);
+      await this.saveDebugSnapshot(page, 'login_cinebol_error');
       return false;
     }
   }
@@ -830,6 +931,185 @@ export class AutomationService {
     };
   }
 
+  /* ─────────── MAIN CINEBOL ─────────── */
+
+  async downloadExcelAndSendToLaravelCinebol(fecha?: string, skipLaravel: boolean = false) {
+    let excelPath = '';
+
+    if (!this.browserCinebol || !this.pageCinebol) {
+      console.log('🆕 [CINEBOL] Iniciando nueva sesión del navegador (Cinebol)...');
+      const init = await this.initializeBrowser();
+      this.browserCinebol = init.browser;
+      this.pageCinebol = init.page;
+
+      if (!(await this.performLoginCinebol(this.pageCinebol))) {
+        throw new Error('Falló el login con credenciales de Cinebol');
+      }
+    } else {
+      console.log('♻️ [CINEBOL] Reutilizando navegador existente (Cinebol)...');
+      if (!(await this.isAlreadyLoggedIn(this.pageCinebol))) {
+        console.log('🔑 [CINEBOL] Sesión no iniciada o vencida. Realizando login...');
+        if (!(await this.performLoginCinebol(this.pageCinebol))) {
+          throw new Error('Falló el login con credenciales de Cinebol');
+        }
+      } else {
+        await this.refreshPageForLatestData(this.pageCinebol);
+      }
+    }
+
+    const fechaFiltro = fecha || this.getTodayBolivia();
+    console.log(`🔄 [CINEBOL] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`);
+    const updated = await this.updateReportData(this.pageCinebol!, fechaFiltro);
+    if (!updated) {
+      console.warn('⚠️ [CINEBOL] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...');
+    }
+
+    console.log('🔍 [CINEBOL] Buscando botón "Exportar a Excel"...');
+    
+    const foundBtn: Locator = this.pageCinebol!.locator(this.excelBtnSelector).first();
+    
+    await this.randomDelay(2000, 3000);
+    await this.pageCinebol!.evaluate(() => window.scrollTo(0, 0));
+    await this.randomDelay(500, 1000);
+
+    try {
+      await foundBtn.waitFor({ state: 'visible', timeout: 20000 });
+    } catch (e) {
+      console.error('❌ [CINEBOL] No se encontró el botón "Exportar a Excel"');
+      await this.saveDebugSnapshot(this.pageCinebol!, 'cinebol_sin_boton_excel');
+      throw new Error(
+        'No se encontró el botón "Exportar a Excel". Revisa la captura en descargas/ para ver qué muestra la página.',
+      );
+    }
+
+    console.log('⬇️ [CINEBOL] Iniciando clic en exportar y esperando descarga...');
+    await foundBtn.scrollIntoViewIfNeeded();
+
+    const [download] = await Promise.all([
+      this.pageCinebol!.waitForEvent('download', { timeout: 30000 }),
+      foundBtn.click(),
+    ]);
+
+    excelPath = path.join(this.downloadPath, `ReporteCinebol_${Date.now()}.xlsx`);
+    await download.saveAs(excelPath);
+    console.log(`✅ [CINEBOL] Archivo descargado exitosamente en: ${excelPath}`);
+
+    if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
+      console.log(`💾 [CINEBOL] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`);
+      return {
+        success: true,
+        message: 'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
+        excelPath,
+        fechaFiltro,
+        laravelResponse: { skipped: true },
+        timestamp: new Date().toISOString(),
+        reusedSession: this.isLoggedInCinebol,
+      };
+    }
+
+    const laravelResponse = await this.sendExcelToLaravel(excelPath);
+
+    return {
+      success: true,
+      message: 'Excel descargado y enviado a Laravel exitosamente (usando credenciales Cinebol)',
+      excelPath,
+      fechaFiltro,
+      laravelResponse,
+      timestamp: new Date().toISOString(),
+      reusedSession: this.isLoggedInCinebol,
+    };
+  }
+
+  /* ─────────── MAIN CON FILTRO FECHA (CINEBOL) ─────────── */
+
+  async downloadExcelWithDateFilterCinebol(fecha: string, skipLaravel: boolean = false) {
+    let excelPath = '';
+
+    if (!this.browserCinebol || !this.pageCinebol) {
+      console.log('🆕 [FILTER-CINEBOL] Iniciando nueva sesión con filtro de fecha...');
+      const init = await this.initializeBrowser();
+      this.browserCinebol = init.browser;
+      this.pageCinebol = init.page;
+
+      if (!(await this.performLoginCinebol(this.pageCinebol))) {
+        throw new Error('Falló el login con credenciales de Cinebol');
+      }
+    } else {
+      console.log('♻️ [FILTER-CINEBOL] Reutilizando navegador existente...');
+      if (!(await this.isAlreadyLoggedIn(this.pageCinebol))) {
+        console.log('🔑 [FILTER-CINEBOL] Sesión no iniciada o vencida. Realizando login...');
+        if (!(await this.performLoginCinebol(this.pageCinebol))) {
+          throw new Error('Falló el login con credenciales de Cinebol');
+        }
+      } else {
+        await this.refreshPageForLatestData(this.pageCinebol);
+      }
+    }
+
+    console.log(`📅 [FILTER-CINEBOL] Aplicando filtro de fecha: ${fecha}...`);
+    const filterApplied = await this.updateReportData(this.pageCinebol!, fecha);
+    if (!filterApplied) {
+      throw new Error(
+        `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
+      );
+    }
+
+    console.log('🔍 [FILTER-CINEBOL] Buscando botón "Exportar a Excel"...');
+    
+    const foundBtn: Locator = this.pageCinebol!.locator(this.excelBtnSelector).first();
+    
+    await this.randomDelay(2000, 3000);
+    await this.pageCinebol!.evaluate(() => window.scrollTo(0, 0));
+    await this.randomDelay(500, 1000);
+
+    try {
+      await foundBtn.waitFor({ state: 'visible', timeout: 20000 });
+    } catch (e) {
+      console.error('❌ [FILTER-CINEBOL] No se encontró el botón "Exportar a Excel"');
+      await this.saveDebugSnapshot(this.pageCinebol!, 'filter_cinebol_sin_boton_excel');
+      throw new Error(
+        'No se encontró el botón "Exportar a Excel" tras filtrar por fecha.',
+      );
+    }
+
+    console.log('⬇️ [FILTER-CINEBOL] Iniciando clic en exportar y esperando descarga...');
+    await foundBtn.scrollIntoViewIfNeeded();
+
+    const [download] = await Promise.all([
+      this.pageCinebol!.waitForEvent('download', { timeout: 30000 }),
+      foundBtn.click(),
+    ]);
+
+    excelPath = path.join(this.downloadPath, `ReporteFilterCinebol_${Date.now()}.xlsx`);
+    await download.saveAs(excelPath);
+    console.log(`✅ [FILTER-CINEBOL] Archivo descargado exitosamente en: ${excelPath}`);
+
+    if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
+      console.log(`💾 [FILTER-CINEBOL] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`);
+      return {
+        success: true,
+        message: 'Excel descargado con filtro de fecha (modo prueba: no enviado a Laravel)',
+        excelPath,
+        fechaFiltro: fecha,
+        laravelResponse: { skipped: true },
+        timestamp: new Date().toISOString(),
+        reusedSession: this.isLoggedInCinebol,
+      };
+    }
+
+    const laravelResponse = await this.sendExcelToLaravel(excelPath);
+
+    return {
+      success: true,
+      message: 'Excel descargado con filtro de fecha y enviado a Laravel exitosamente (usando credenciales Cinebol)',
+      excelPath,
+      fechaFiltro: fecha,
+      laravelResponse,
+      timestamp: new Date().toISOString(),
+      reusedSession: this.isLoggedInCinebol,
+    };
+  }
+
   /* ─────────── RETROCOMPATIBILIDAD ─────────── */
 
   private async filterByDate(page: Page, fecha: string): Promise<boolean> {
@@ -861,6 +1141,13 @@ export class AutomationService {
       this.pageAlt = null;
       this.isLoggedInAlt = false;
     }
+
+    if (this.browserCinebol) {
+      await this.browserCinebol.close().catch(() => {});
+      this.browserCinebol = null;
+      this.pageCinebol = null;
+      this.isLoggedInCinebol = false;
+    }
     console.log('✅ [CLOSE] Navegadores cerrados.');
   }
 
@@ -874,6 +1161,10 @@ export class AutomationService {
       pageAltActive: this.pageAlt !== null,
       isLoggedInAlt: this.isLoggedInAlt,
       currentPageUrlAlt: this.currentPageUrlAlt,
+      browserCinebolActive: this.browserCinebol !== null,
+      pageCinebolActive: this.pageCinebol !== null,
+      isLoggedInCinebol: this.isLoggedInCinebol,
+      currentPageUrlCinebol: this.currentPageUrlCinebol,
     };
   }
 }

@@ -274,4 +274,104 @@ export class AutomationController {
     console.log('📅 [API] Descarga con filtro de fecha ejecutada');
     return this.automationService.downloadExcelWithDateFilter(body.fecha);
   }
+
+  // ENDPOINTS CINEBOL (CajaCinebol172131)
+  @Post('download-and-send-cinebol')
+  @ApiOperation({ 
+    summary: 'Descargar Excel y enviar a Laravel (Cinebol)',
+    description: 'Ejecuta el proceso completo de automatización con las credenciales de CajaCinebol172131: inicia sesión en BCP Bolivia, descarga archivo Excel con movimientos y lo envía al backend Laravel configurado'
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        auth_token: {
+          type: 'string',
+          description: 'Token de autenticación único',
+          example: ''
+        },
+        fecha: {
+          type: 'string',
+          description: 'Fecha opcional en formato YYYY-MM-DD. Si no se envía, usa la fecha de hoy en Bolivia.',
+          example: '2026-10-08'
+        }
+      },
+      required: ['auth_token'],
+    },
+  })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Proceso completado exitosamente con credenciales Cinebol',
+    schema: {
+      example: { 
+        success: true, 
+        message: 'Excel descargado y enviado a Laravel exitosamente (usando credenciales Cinebol)',
+        excelPath: '/ruta/descargas/ReporteCinebol_1234567890.xlsx',
+        laravelResponse: {
+          success: true,
+          message: 'Archivo procesado correctamente',
+          registros: 45
+        },
+        timestamp: '2024-01-15T10:30:00.000Z',
+        reusedSession: true
+      }
+    }
+  })
+  async downloadAndSendToLaravelCinebol(@Body() body: { auth_token: string; fecha?: string }) {
+    console.log('🎬 [API] Endpoint Cinebol ejecutado con credenciales de CajaCinebol172131');
+    return this.automationService.downloadExcelAndSendToLaravelCinebol(body?.fecha);
+  }
+
+  @Post('download-with-date-filter-cinebol')
+  @ApiOperation({ 
+    summary: 'Descargar Excel con filtro de fecha (CajaCinebol)',
+    description: 'Ejecuta el proceso de automatización con credenciales de CajaCinebol172131, filtra los datos por la fecha especificada, actualiza el reporte y luego descarga el Excel'
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        fecha: { 
+          type: 'string', 
+          description: 'Fecha para filtrar el reporte en formato YYYY-MM-DD',
+          example: '2026-02-26' 
+        },
+        auth_token: {
+          type: 'string',
+          description: 'Token de autenticación único',
+          example: ''
+        }
+      },
+      required: ['fecha', 'auth_token'],
+    },
+  })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Proceso completado exitosamente con filtro de fecha (Cinebol)',
+    schema: {
+      example: { 
+        success: true, 
+        message: 'Excel descargado con filtro de fecha y enviado a Laravel exitosamente (usando credenciales Cinebol)',
+        excelPath: '/ruta/descargas/ReporteFilterCinebol_1234567890.xlsx',
+        fechaFiltro: '2026-02-26',
+        laravelResponse: {
+          success: true,
+          message: 'Archivo procesado correctamente',
+          registros: 45
+        },
+        timestamp: '2024-01-15T10:30:00.000Z',
+        reusedSession: false
+      }
+    }
+  })
+  async downloadWithDateFilterCinebol(@Body() body: { fecha: string; auth_token: string }) {
+    if (!body.fecha) {
+      return {
+        success: false,
+        message: 'El campo "fecha" es requerido en formato YYYY-MM-DD'
+      };
+    }
+    console.log('🎬 [API] Descarga con filtro de fecha Cinebol ejecutada');
+    return this.automationService.downloadExcelWithDateFilterCinebol(body.fecha);
+  }
 }
