@@ -15,7 +15,7 @@ chromium.use(StealthPlugin());
 export class AutomationService {
   private downloadPath: string;
   private laravelApiUrl: string;
-  
+
   // 👈 CAMBIO 1: Selector más flexible y robusto para encontrar el botón de Excel
   private readonly excelBtnSelector =
     'button.buttons-excel, a.buttons-excel, button:has-text("Excel"), a:has-text("Excel"), [title*="Excel"], [class*="buttons-excel"]';
@@ -64,15 +64,15 @@ export class AutomationService {
     return new Promise((resolve) => setTimeout(resolve, delay));
   }
 
-  // 👈 CAMBIO 2: Escritura humana letra por letra para evitar detección de bots
+  // Escritura humana optimizada (rápida pero disparando eventos de teclado reales)
   private async typeWithDelay(page: Page, selector: string, text: string) {
     await page.locator(selector).click();
-    await this.randomDelay(300, 600);
-    await page.keyboard.type(text, { delay: 100 });
+    await this.randomDelay(80, 150);
+    await page.keyboard.type(text, { delay: 20 });
   }
 
-  private async simulateHumanBehavior(page: Page) {
-    await this.randomDelay(200, 400);
+  private async simulateHumanBehavior(_page?: Page) {
+    await this.randomDelay(100, 200);
   }
 
   /**
@@ -111,8 +111,7 @@ export class AutomationService {
   private async isAlreadyLoggedIn(page: Page): Promise<boolean> {
     try {
       const currentUrl = page.url();
-      const hasExportBtn =
-        (await page.$(this.excelBtnSelector)) !== null;
+      const hasExportBtn = (await page.$(this.excelBtnSelector)) !== null;
       return hasExportBtn || currentUrl.toLowerCase().includes('dashboard');
     } catch {
       return false;
@@ -125,7 +124,10 @@ export class AutomationService {
     const rawHeadless = this.getEnv('HEADLESS');
     const headlessClean =
       rawHeadless !== undefined
-        ? rawHeadless.trim().replace(/^['"]|['"]$/g, '').toLowerCase()
+        ? rawHeadless
+            .trim()
+            .replace(/^['"]|['"]$/g, '')
+            .toLowerCase()
         : undefined;
 
     let isHeadless =
@@ -143,15 +145,20 @@ export class AutomationService {
       isHeadless = true;
     }
 
+    const slowMoEnv = this.getEnv('SLOW_MO');
+    const slowMo = slowMoEnv !== undefined ? parseInt(slowMoEnv, 10) : 0;
+
     console.log(
       `🚀 [BROWSER] Iniciando Chromium en modo: ${
-        isHeadless ? 'HEADLESS (segundo plano)' : 'VISIBLE (en tu pantalla con slowMo 400ms)'
+        isHeadless
+          ? 'HEADLESS (segundo plano)'
+          : `VISIBLE (en pantalla con slowMo ${slowMo}ms)`
       }`,
     );
 
     const browser = await chromium.launch({
       headless: isHeadless,
-      slowMo: isHeadless ? 0 : 400,
+      slowMo: slowMo,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -159,13 +166,16 @@ export class AutomationService {
         '--disable-accelerated-2d-canvas',
         '--disable-gpu',
         '--disable-blink-features=AutomationControlled',
-        '--window-size=1920,1080', // 👈 Tamaño fijo para evitar detección
+        '--disable-extensions',
+        '--disable-component-update',
+        '--disable-background-networking',
+        '--window-size=1920,1080',
       ],
     });
 
     const context = await browser.newContext({
       acceptDownloads: true,
-      viewport: { width: 1920, height: 1080 }, // 👈 Viewport consistente en ambos modos
+      viewport: { width: 1920, height: 1080 },
       locale: 'es-BO',
       timezoneId: 'America/La_Paz',
       userAgent:
@@ -177,14 +187,21 @@ export class AutomationService {
       await page.bringToFront().catch(() => {});
     }
 
-    // 👈 Ofuscación avanzada anti-detección
+    // Ofuscación avanzada anti-detección
     await page.addInitScript(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-      Object.defineProperty(navigator, 'languages', { get: () => ['es-BO', 'es', 'en-US', 'en'] });
-      
-      const originalGetParameter = (WebGLRenderingContext.prototype as any).getParameter;
-      (WebGLRenderingContext.prototype as any).getParameter = function(parameter: number) {
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5],
+      });
+      Object.defineProperty(navigator, 'languages', {
+        get: () => ['es-BO', 'es', 'en-US', 'en'],
+      });
+
+      const originalGetParameter = (WebGLRenderingContext.prototype as any)
+        .getParameter;
+      (WebGLRenderingContext.prototype as any).getParameter = function (
+        parameter: number,
+      ) {
         if (parameter === 37445) return 'Intel Inc.';
         if (parameter === 37446) return 'Intel Iris OpenGL Engine';
         return originalGetParameter.call(this, parameter);
@@ -227,7 +244,9 @@ export class AutomationService {
       console.log(`✍️ [LOGIN-MAIN] Escribiendo usuario: ${user}`);
       await this.typeWithDelay(page, '#authname', user);
 
-      console.log('🔍 [LOGIN-MAIN] Buscando campo de contraseña (#authpass)...');
+      console.log(
+        '🔍 [LOGIN-MAIN] Buscando campo de contraseña (#authpass)...',
+      );
       const passField = await page
         .waitForSelector('#authpass', { timeout: 8000 })
         .catch(() => null);
@@ -252,8 +271,8 @@ export class AutomationService {
         return false;
       }
 
-      // 👈 Pausa de seguridad antes del clic
-      await this.randomDelay(1000, 1500);
+      // Pausa mínima para asentar eventos de entrada
+      await this.randomDelay(200, 400);
 
       console.log('🔘 [LOGIN-MAIN] Presionando botón de ingreso (#authbtn)...');
       await Promise.all([
@@ -268,11 +287,19 @@ export class AutomationService {
         page.click('#authbtn'),
       ]);
 
-      await this.randomDelay(1500, 2500);
-      
+      // Si ya navegó al dashboard o ya tiene el botón de Excel, éxito inmediato
+      if (await this.isAlreadyLoggedIn(page)) {
+        console.log(`📍 [LOGIN-MAIN] URL tras autenticación: ${page.url()}`);
+        this.isLoggedIn = true;
+        this.currentPageUrl = page.url();
+        return true;
+      }
+
       const loginSuccess = await this.handleLoginError(page, pass);
       if (!loginSuccess) {
-        console.error('❌ [LOGIN-MAIN] No se pudo completar el login después de reintentar');
+        console.error(
+          '❌ [LOGIN-MAIN] No se pudo completar el login después de reintentar',
+        );
         return false;
       }
 
@@ -283,7 +310,10 @@ export class AutomationService {
 
       return true;
     } catch (error: any) {
-      console.error('❌ [LOGIN-MAIN] Error durante el proceso de login:', error.message);
+      console.error(
+        '❌ [LOGIN-MAIN] Error durante el proceso de login:',
+        error.message,
+      );
       await this.saveDebugSnapshot(page, 'login_main_error');
       return false;
     }
@@ -292,9 +322,10 @@ export class AutomationService {
   /**
    * Maneja el mensaje de error "Ingrese sus datos" reintentando con solo contraseña
    */
-  private async handleLoginError(page: Page, password: string): Promise<boolean> {
-    await this.randomDelay(1000, 2000);
-
+  private async handleLoginError(
+    page: Page,
+    password: string,
+  ): Promise<boolean> {
     const errorSelectors = [
       'text=Ingrese sus datos',
       '[class*="alert"][class*="error"]',
@@ -308,42 +339,55 @@ export class AutomationService {
       const errorElement = await page.$(selector).catch(() => null);
       if (errorElement) {
         hasError = true;
-        console.log('⚠️ [LOGIN] Detectado mensaje de error "Ingrese sus datos". Reintentando...');
+        console.log(
+          '⚠️ [LOGIN] Detectado mensaje de error "Ingrese sus datos". Reintentando...',
+        );
         break;
       }
     }
 
     if (hasError) {
-      const closeBtn = await page.$('button[class*="close"], .alert button, [aria-label="Close"]').catch(() => null);
+      const closeBtn = await page
+        .$('button[class*="close"], .alert button, [aria-label="Close"]')
+        .catch(() => null);
       if (closeBtn) {
         await closeBtn.click();
-        await this.randomDelay(300, 500);
+        await this.randomDelay(150, 300);
       }
 
       console.log('✍️ [LOGIN-RETRY] Reingresando contraseña...');
       await this.typeWithDelay(page, '#authpass', password);
-      await this.randomDelay(500, 1000);
+      await this.randomDelay(200, 400);
 
       console.log('🔘 [LOGIN-RETRY] Click en botón Iniciar Sesión...');
       await Promise.all([
         page
           .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 35000 })
           .catch((err) => {
-            console.log('⚠️ [LOGIN-RETRY] Navegación tardó o finalizó:', err.message);
+            console.log(
+              '⚠️ [LOGIN-RETRY] Navegación tardó o finalizó:',
+              err.message,
+            );
           }),
         page.click('#authbtn'),
       ]);
 
-      await this.randomDelay(1500, 2500);
-      
-      const stillHasError = await page.$('text=Ingrese sus datos').catch(() => null);
+      await this.randomDelay(500, 1000);
+
+      const stillHasError = await page
+        .$('text=Ingrese sus datos')
+        .catch(() => null);
       if (stillHasError) {
-        console.error('❌ [LOGIN-RETRY] El error persiste después del reintento');
+        console.error(
+          '❌ [LOGIN-RETRY] El error persiste después del reintento',
+        );
         await this.saveDebugSnapshot(page, 'login_retry_failed');
         return false;
       }
 
-      console.log('✅ [LOGIN-RETRY] Login completado exitosamente después del reintento');
+      console.log(
+        '✅ [LOGIN-RETRY] Login completado exitosamente después del reintento',
+      );
     }
 
     return true;
@@ -396,8 +440,8 @@ export class AutomationService {
       console.log('✍️ [LOGIN-ALT] Escribiendo contraseña...');
       await this.typeWithDelay(page, '#authpass', pass);
 
-      // 👈 Pausa de seguridad antes del clic
-      await this.randomDelay(1000, 1500);
+      // Pausa mínima para asentar eventos de entrada
+      await this.randomDelay(200, 400);
 
       console.log('🔘 [LOGIN-ALT] Presionando botón ingresar (#authbtn)...');
       await Promise.all([
@@ -412,14 +456,22 @@ export class AutomationService {
         page.click('#authbtn'),
       ]);
 
-      await this.randomDelay(1500, 2500);
-      
+      // Si ya navegó al dashboard o ya tiene el botón de Excel, éxito inmediato
+      if (await this.isAlreadyLoggedIn(page)) {
+        console.log(`📍 [LOGIN-ALT] URL tras autenticación: ${page.url()}`);
+        this.isLoggedInAlt = true;
+        this.currentPageUrlAlt = page.url();
+        return true;
+      }
+
       const loginSuccess = await this.handleLoginError(page, pass);
       if (!loginSuccess) {
-        console.error('❌ [LOGIN-ALT] No se pudo completar el login después de reintentar');
+        console.error(
+          '❌ [LOGIN-ALT] No se pudo completar el login después de reintentar',
+        );
         return false;
       }
-      
+
       console.log(`📍 [LOGIN-ALT] URL tras autenticación: ${page.url()}`);
 
       this.isLoggedInAlt = true;
@@ -427,7 +479,10 @@ export class AutomationService {
 
       return true;
     } catch (error: any) {
-      console.error('❌ [LOGIN-ALT] Error durante el proceso de login:', error.message);
+      console.error(
+        '❌ [LOGIN-ALT] Error durante el proceso de login:',
+        error.message,
+      );
       await this.saveDebugSnapshot(page, 'login_alt_error');
       return false;
     }
@@ -448,17 +503,23 @@ export class AutomationService {
       });
 
       console.log(`📍 [LOGIN-CINEBOL] URL actual: ${page.url()}`);
-      console.log(`📄 [LOGIN-CINEBOL] Título de página: "${await page.title()}"`);
+      console.log(
+        `📄 [LOGIN-CINEBOL] Título de página: "${await page.title()}"`,
+      );
 
       await this.simulateHumanBehavior(page);
 
-      console.log('🔍 [LOGIN-CINEBOL] Buscando campo de usuario (#authname)...');
+      console.log(
+        '🔍 [LOGIN-CINEBOL] Buscando campo de usuario (#authname)...',
+      );
       const userField = await page
         .waitForSelector('#authname', { timeout: 15000 })
         .catch(() => null);
 
       if (!userField) {
-        console.error('❌ [LOGIN-CINEBOL] No se encontró el selector "#authname"');
+        console.error(
+          '❌ [LOGIN-CINEBOL] No se encontró el selector "#authname"',
+        );
         await this.saveDebugSnapshot(page, 'login_cinebol_sin_authname');
         return false;
       }
@@ -466,13 +527,17 @@ export class AutomationService {
       console.log(`✍️ [LOGIN-CINEBOL] Escribiendo usuario: ${user}`);
       await this.typeWithDelay(page, '#authname', user);
 
-      console.log('🔍 [LOGIN-CINEBOL] Buscando campo de contraseña (#authpass)...');
+      console.log(
+        '🔍 [LOGIN-CINEBOL] Buscando campo de contraseña (#authpass)...',
+      );
       const passField = await page
         .waitForSelector('#authpass', { timeout: 8000 })
         .catch(() => null);
 
       if (!passField) {
-        console.error('❌ [LOGIN-CINEBOL] No se encontró el selector "#authpass"');
+        console.error(
+          '❌ [LOGIN-CINEBOL] No se encontró el selector "#authpass"',
+        );
         await this.saveDebugSnapshot(page, 'login_cinebol_sin_authpass');
         return false;
       }
@@ -491,10 +556,12 @@ export class AutomationService {
         return false;
       }
 
-      // 👈 Pausa de seguridad antes del clic
-      await this.randomDelay(1000, 1500);
+      // Pausa mínima para asentar eventos de entrada
+      await this.randomDelay(200, 400);
 
-      console.log('🔘 [LOGIN-CINEBOL] Presionando botón de ingreso (#authbtn)...');
+      console.log(
+        '🔘 [LOGIN-CINEBOL] Presionando botón de ingreso (#authbtn)...',
+      );
       await Promise.all([
         page
           .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 35000 })
@@ -507,11 +574,19 @@ export class AutomationService {
         page.click('#authbtn'),
       ]);
 
-      await this.randomDelay(1500, 2500);
-      
+      // Si ya navegó al dashboard o ya tiene el botón de Excel, éxito inmediato
+      if (await this.isAlreadyLoggedIn(page)) {
+        console.log(`📍 [LOGIN-CINEBOL] URL tras autenticación: ${page.url()}`);
+        this.isLoggedInCinebol = true;
+        this.currentPageUrlCinebol = page.url();
+        return true;
+      }
+
       const loginSuccess = await this.handleLoginError(page, pass);
       if (!loginSuccess) {
-        console.error('❌ [LOGIN-CINEBOL] No se pudo completar el login después de reintentar');
+        console.error(
+          '❌ [LOGIN-CINEBOL] No se pudo completar el login después de reintentar',
+        );
         return false;
       }
 
@@ -522,7 +597,10 @@ export class AutomationService {
 
       return true;
     } catch (error: any) {
-      console.error('❌ [LOGIN-CINEBOL] Error durante el proceso de login:', error.message);
+      console.error(
+        '❌ [LOGIN-CINEBOL] Error durante el proceso de login:',
+        error.message,
+      );
       await this.saveDebugSnapshot(page, 'login_cinebol_error');
       return false;
     }
@@ -540,31 +618,51 @@ export class AutomationService {
   }
 
   private async refreshPageForLatestData(page: Page) {
-    console.log('🔄 [REFRESH] Recargando la página para reiniciar estado...');
-    await page.reload({
-      waitUntil: 'domcontentloaded',
-      timeout: 25000,
-    });
-    await this.randomDelay(1000, 1500);
+    const hasReportControls = await page.$('#startDate1').catch(() => null);
+    if (!hasReportControls) {
+      console.log(
+        '🔄 [REFRESH] Controles no detectados en DOM. Recargando página...',
+      );
+      await page.reload({
+        waitUntil: 'domcontentloaded',
+        timeout: 25000,
+      });
+      await this.randomDelay(200, 400);
+    } else {
+      console.log(
+        '⚡ [FAST] Controles de reporte listos en memoria. Continuando sin reload innecesario.',
+      );
+    }
   }
 
-  private async updateReportData(page: Page, targetDate?: string): Promise<boolean> {
+  private async updateReportData(
+    page: Page,
+    targetDate?: string,
+  ): Promise<boolean> {
     const fecha = targetDate || this.getTodayBolivia();
-    console.log(`📅 [REPORT-UPDATE] Actualizando reporte con fecha: ${fecha}...`);
+    console.log(
+      `📅 [REPORT-UPDATE] Actualizando reporte con fecha: ${fecha}...`,
+    );
 
     try {
-      console.log('🔍 [REPORT-UPDATE] Buscando campo de fecha (#startDate1)...');
+      console.log(
+        '🔍 [REPORT-UPDATE] Buscando campo de fecha (#startDate1)...',
+      );
       const inputField = await page
         .waitForSelector('#startDate1', { timeout: 10000 })
         .catch(() => null);
 
       if (!inputField) {
-        console.error('❌ [REPORT-UPDATE] No se encontró el campo "#startDate1"');
+        console.error(
+          '❌ [REPORT-UPDATE] No se encontró el campo "#startDate1"',
+        );
         await this.saveDebugSnapshot(page, 'update_sin_startDate1');
         return false;
       }
 
-      console.log(`✍️ [REPORT-UPDATE] Asignando fecha ${fecha} a #startDate1...`);
+      console.log(
+        `✍️ [REPORT-UPDATE] Asignando fecha ${fecha} a #startDate1...`,
+      );
       await page.evaluate((fechaValue) => {
         const input = document.getElementById('startDate1') as HTMLInputElement;
         if (input) {
@@ -574,45 +672,101 @@ export class AutomationService {
         }
       }, fecha);
 
-      await this.randomDelay(300, 600);
+      await this.randomDelay(100, 200);
 
-      console.log('🔘 [REPORT-UPDATE] Buscando botón "Actualizar Reporte" (#fondoreportes)...');
+      console.log(
+        '🔘 [REPORT-UPDATE] Buscando botón "Actualizar Reporte" (#fondoreportes)...',
+      );
       const btnField = await page
         .waitForSelector('#fondoreportes', { timeout: 8000 })
         .catch(() => null);
 
       if (!btnField) {
-        console.error('❌ [REPORT-UPDATE] No se encontró el botón "#fondoreportes"');
+        console.error(
+          '❌ [REPORT-UPDATE] No se encontró el botón "#fondoreportes"',
+        );
         await this.saveDebugSnapshot(page, 'update_sin_fondoreportes');
         return false;
       }
 
-      console.log('🖱️ [REPORT-UPDATE] Clic en "#fondoreportes" para consultar últimos movimientos...');
+      console.log(
+        '🖱️ [REPORT-UPDATE] Clic en "#fondoreportes" para consultar últimos movimientos...',
+      );
       await page.click('#fondoreportes');
 
-      console.log('⏳ [REPORT-UPDATE] Esperando respuesta del servidor y carga de datos...');
-      await page
-        .waitForLoadState('networkidle', { timeout: 15000 })
-        .catch(() => {
-          console.log('ℹ️ [REPORT-UPDATE] Espera de red finalizada, continuando...');
-        });
+      console.log(
+        '⏳ [REPORT-UPDATE] Esperando respuesta del servidor y carga de datos...',
+      );
+      await Promise.race([
+        page
+          .waitForSelector(
+            '.dataTables_processing, .blockUI, div[id*="loading"], div[class*="loading"]',
+            { state: 'hidden', timeout: 8000 },
+          )
+          .catch(() => {}),
+        page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {}),
+      ]);
 
-      await page
-        .waitForSelector(
-          '.dataTables_processing, .blockUI, div[id*="loading"], div[class*="loading"]',
-          { state: 'hidden', timeout: 10000 },
-        )
+      const exportBtn = page.locator(this.excelBtnSelector).first();
+      await exportBtn
+        .waitFor({ state: 'visible', timeout: 10000 })
         .catch(() => {});
 
-      await this.randomDelay(2000, 3000);
-
-      console.log('✅ [REPORT-UPDATE] Reporte actualizado exitosamente con los últimos datos.');
+      console.log('✅ [REPORT-UPDATE] Reporte actualizado exitosamente.');
       return true;
     } catch (error: any) {
-      console.error('❌ [REPORT-UPDATE] Error al actualizar reporte:', error.message);
+      console.error(
+        '❌ [REPORT-UPDATE] Error al actualizar reporte:',
+        error.message,
+      );
       await this.saveDebugSnapshot(page, 'update_report_error');
       return false;
     }
+  }
+
+  /* ─────────── DESCARGA EXCEL OPTIMIZADA ─────────── */
+
+  private async triggerExcelDownload(
+    page: Page,
+    filePrefix: string,
+  ): Promise<string> {
+    console.log(`🔍 [${filePrefix}] Buscando botón "Exportar a Excel"...`);
+    const foundBtn: Locator = page.locator(this.excelBtnSelector).first();
+
+    try {
+      await foundBtn.waitFor({ state: 'visible', timeout: 15000 });
+    } catch (_e) {
+      console.error(
+        `❌ [${filePrefix}] No se encontró el botón "Exportar a Excel"`,
+      );
+      await this.saveDebugSnapshot(
+        page,
+        `${filePrefix.toLowerCase()}_sin_boton_excel`,
+      );
+      throw new Error(
+        'No se encontró el botón "Exportar a Excel". Revisa la captura en descargas/ para ver qué muestra la página.',
+      );
+    }
+
+    console.log(
+      `⬇️ [${filePrefix}] Iniciando clic en exportar y esperando descarga...`,
+    );
+    await foundBtn.scrollIntoViewIfNeeded();
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 30000 }),
+      foundBtn.click(),
+    ]);
+
+    const excelPath = path.join(
+      this.downloadPath,
+      `${filePrefix}_${Date.now()}.xlsx`,
+    );
+    await download.saveAs(excelPath);
+    console.log(
+      `✅ [${filePrefix}] Archivo descargado exitosamente en: ${excelPath}`,
+    );
+    return excelPath;
   }
 
   /* ─────────── ELIMINAR ARCHIVO ─────────── */
@@ -631,7 +785,9 @@ export class AutomationService {
   /* ─────────── LARAVEL ─────────── */
 
   private async sendExcelToLaravel(excelPath: string) {
-    console.log(`📤 [LARAVEL] Enviando ${excelPath} a ${this.laravelApiUrl}...`);
+    console.log(
+      `📤 [LARAVEL] Enviando ${excelPath} a ${this.laravelApiUrl}...`,
+    );
     const formData = new FormData();
     formData.append('archivo_excel', fs.createReadStream(excelPath));
     formData.append('origen', 'nestjs');
@@ -643,7 +799,10 @@ export class AutomationService {
         maxBodyLength: Infinity,
       });
 
-      console.log(`✅ [LARAVEL] Respuesta recibida (${response.status}):`, response.data);
+      console.log(
+        `✅ [LARAVEL] Respuesta recibida (${response.status}):`,
+        response.data,
+      );
       return response.data;
     } catch (error: any) {
       if (error.response) {
@@ -652,7 +811,10 @@ export class AutomationService {
           error.response.data,
         );
       } else {
-        console.error(`❌ [LARAVEL] Error de conexión con Laravel:`, error.message);
+        console.error(
+          `❌ [LARAVEL] Error de conexión con Laravel:`,
+          error.message,
+        );
       }
       throw error;
     } finally {
@@ -662,9 +824,10 @@ export class AutomationService {
 
   /* ─────────── MAIN PRINCIPAL ─────────── */
 
-  async downloadExcelAndSendToLaravel(fecha?: string, skipLaravel: boolean = false) {
-    let excelPath = '';
-
+  async downloadExcelAndSendToLaravel(
+    fecha?: string,
+    skipLaravel: boolean = false,
+  ) {
     if (!this.browser || !this.page) {
       console.log('🆕 [MAIN] Iniciando nueva sesión del navegador...');
       const init = await this.initializeBrowser();
@@ -677,7 +840,9 @@ export class AutomationService {
     } else {
       console.log('♻️ [MAIN] Reutilizando navegador existente...');
       if (!(await this.isAlreadyLoggedIn(this.page))) {
-        console.log('🔑 [MAIN] Sesión no iniciada o vencida. Realizando login...');
+        console.log(
+          '🔑 [MAIN] Sesión no iniciada o vencida. Realizando login...',
+        );
         if (!(await this.performLogin(this.page))) {
           throw new Error('Falló el login con credenciales principales');
         }
@@ -687,48 +852,26 @@ export class AutomationService {
     }
 
     const fechaFiltro = fecha || this.getTodayBolivia();
-    console.log(`🔄 [MAIN] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`);
-    const updated = await this.updateReportData(this.page!, fechaFiltro);
+    console.log(
+      `🔄 [MAIN] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
+    );
+    const updated = await this.updateReportData(this.page, fechaFiltro);
     if (!updated) {
-      console.warn('⚠️ [MAIN] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...');
-    }
-
-    console.log('🔍 [MAIN] Buscando botón "Exportar a Excel"...');
-    
-    // 👈 CAMBIO 3: Uso correcto de Locator para evitar errores de TypeScript "never"
-    const foundBtn: Locator = this.page!.locator(this.excelBtnSelector).first();
-    
-    await this.randomDelay(2000, 3000);
-    await this.page!.evaluate(() => window.scrollTo(0, 0));
-    await this.randomDelay(500, 1000);
-
-    try {
-      await foundBtn.waitFor({ state: 'visible', timeout: 20000 });
-    } catch (e) {
-      console.error('❌ [MAIN] No se encontró el botón "Exportar a Excel"');
-      await this.saveDebugSnapshot(this.page!, 'main_sin_boton_excel');
-      throw new Error(
-        'No se encontró el botón "Exportar a Excel". Revisa la captura en descargas/ para ver qué muestra la página.',
+      console.warn(
+        '⚠️ [MAIN] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
       );
     }
 
-    console.log('⬇️ [MAIN] Iniciando clic en exportar y esperando descarga...');
-    await foundBtn.scrollIntoViewIfNeeded();
-
-    const [download] = await Promise.all([
-      this.page!.waitForEvent('download', { timeout: 30000 }),
-      foundBtn.click(),
-    ]);
-
-    excelPath = path.join(this.downloadPath, `Reporte_${Date.now()}.xlsx`);
-    await download.saveAs(excelPath);
-    console.log(`✅ [MAIN] Archivo descargado exitosamente en: ${excelPath}`);
+    const excelPath = await this.triggerExcelDownload(this.page, 'Reporte');
 
     if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
-      console.log(`💾 [MAIN] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`);
+      console.log(
+        `💾 [MAIN] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
+      );
       return {
         success: true,
-        message: 'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
+        message:
+          'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
         excelPath,
         fechaFiltro,
         laravelResponse: { skipped: true },
@@ -752,9 +895,10 @@ export class AutomationService {
 
   /* ─────────── MAIN ALTERNATIVO ─────────── */
 
-  async downloadExcelAndSendToLaravelAlt(fecha?: string, skipLaravel: boolean = false) {
-    let excelPath = '';
-
+  async downloadExcelAndSendToLaravelAlt(
+    fecha?: string,
+    skipLaravel: boolean = false,
+  ) {
     if (!this.browserAlt || !this.pageAlt) {
       console.log('🆕 [ALT] Iniciando nueva sesión del navegador (Alt)...');
       const init = await this.initializeBrowser();
@@ -767,7 +911,9 @@ export class AutomationService {
     } else {
       console.log('♻️ [ALT] Reutilizando navegador existente (Alt)...');
       if (!(await this.isAlreadyLoggedIn(this.pageAlt))) {
-        console.log('🔑 [ALT] Sesión no iniciada o vencida. Realizando login...');
+        console.log(
+          '🔑 [ALT] Sesión no iniciada o vencida. Realizando login...',
+        );
         if (!(await this.performLoginAlt(this.pageAlt))) {
           throw new Error('Falló el login con credenciales alternativas');
         }
@@ -777,48 +923,29 @@ export class AutomationService {
     }
 
     const fechaFiltro = fecha || this.getTodayBolivia();
-    console.log(`🔄 [ALT] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`);
-    const updated = await this.updateReportData(this.pageAlt!, fechaFiltro);
+    console.log(
+      `🔄 [ALT] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
+    );
+    const updated = await this.updateReportData(this.pageAlt, fechaFiltro);
     if (!updated) {
-      console.warn('⚠️ [ALT] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...');
-    }
-
-    console.log('🔍 [ALT] Buscando botón "Exportar a Excel"...');
-    
-    // 👈 CAMBIO 4: Uso correcto de Locator para evitar errores de TypeScript "never"
-    const foundBtn: Locator = this.pageAlt!.locator(this.excelBtnSelector).first();
-    
-    await this.randomDelay(2000, 3000);
-    await this.pageAlt!.evaluate(() => window.scrollTo(0, 0));
-    await this.randomDelay(500, 1000);
-
-    try {
-      await foundBtn.waitFor({ state: 'visible', timeout: 20000 });
-    } catch (e) {
-      console.error('❌ [ALT] No se encontró el botón "Exportar a Excel"');
-      await this.saveDebugSnapshot(this.pageAlt!, 'alt_sin_boton_excel');
-      throw new Error(
-        'No se encontró el botón "Exportar a Excel". Revisa la captura en descargas/ para ver qué muestra la página.',
+      console.warn(
+        '⚠️ [ALT] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
       );
     }
 
-    console.log('⬇️ [ALT] Iniciando clic en exportar y esperando descarga...');
-    await foundBtn.scrollIntoViewIfNeeded();
-
-    const [download] = await Promise.all([
-      this.pageAlt!.waitForEvent('download', { timeout: 30000 }),
-      foundBtn.click(),
-    ]);
-
-    excelPath = path.join(this.downloadPath, `ReporteAlt_${Date.now()}.xlsx`);
-    await download.saveAs(excelPath);
-    console.log(`✅ [ALT] Archivo descargado exitosamente en: ${excelPath}`);
+    const excelPath = await this.triggerExcelDownload(
+      this.pageAlt,
+      'ReporteAlt',
+    );
 
     if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
-      console.log(`💾 [ALT] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`);
+      console.log(
+        `💾 [ALT] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
+      );
       return {
         success: true,
-        message: 'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
+        message:
+          'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
         excelPath,
         fechaFiltro,
         laravelResponse: { skipped: true },
@@ -831,7 +958,8 @@ export class AutomationService {
 
     return {
       success: true,
-      message: 'Excel descargado y enviado a Laravel exitosamente (usando credenciales alternativas)',
+      message:
+        'Excel descargado y enviado a Laravel exitosamente (usando credenciales alternativas)',
       excelPath,
       fechaFiltro,
       laravelResponse,
@@ -842,9 +970,10 @@ export class AutomationService {
 
   /* ─────────── MAIN CON FILTRO FECHA (CAJALIVE) ─────────── */
 
-  async downloadExcelWithDateFilter(fecha: string, skipLaravel: boolean = false) {
-    let excelPath = '';
-
+  async downloadExcelWithDateFilter(
+    fecha: string,
+    skipLaravel: boolean = false,
+  ) {
     if (!this.browserAlt || !this.pageAlt) {
       console.log('🆕 [FILTER] Iniciando nueva sesión con filtro de fecha...');
       const init = await this.initializeBrowser();
@@ -857,7 +986,9 @@ export class AutomationService {
     } else {
       console.log('♻️ [FILTER] Reutilizando navegador existente...');
       if (!(await this.isAlreadyLoggedIn(this.pageAlt))) {
-        console.log('🔑 [FILTER] Sesión no iniciada o vencida. Realizando login...');
+        console.log(
+          '🔑 [FILTER] Sesión no iniciada o vencida. Realizando login...',
+        );
         if (!(await this.performLoginAlt(this.pageAlt))) {
           throw new Error('Falló el login con credenciales alternativas');
         }
@@ -867,49 +998,26 @@ export class AutomationService {
     }
 
     console.log(`📅 [FILTER] Aplicando filtro de fecha: ${fecha}...`);
-    const filterApplied = await this.updateReportData(this.pageAlt!, fecha);
+    const filterApplied = await this.updateReportData(this.pageAlt, fecha);
     if (!filterApplied) {
       throw new Error(
         `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
       );
     }
 
-    console.log('🔍 [FILTER] Buscando botón "Exportar a Excel"...');
-    
-    // 👈 CAMBIO 5: Uso correcto de Locator para evitar errores de TypeScript "never"
-    const foundBtn: Locator = this.pageAlt!.locator(this.excelBtnSelector).first();
-    
-    await this.randomDelay(2000, 3000);
-    await this.pageAlt!.evaluate(() => window.scrollTo(0, 0));
-    await this.randomDelay(500, 1000);
-
-    try {
-      await foundBtn.waitFor({ state: 'visible', timeout: 20000 });
-    } catch (e) {
-      console.error('❌ [FILTER] No se encontró el botón "Exportar a Excel"');
-      await this.saveDebugSnapshot(this.pageAlt!, 'filter_sin_boton_excel');
-      throw new Error(
-        'No se encontró el botón "Exportar a Excel" tras filtrar por fecha.',
-      );
-    }
-
-    console.log('⬇️ [FILTER] Iniciando clic en exportar y esperando descarga...');
-    await foundBtn.scrollIntoViewIfNeeded();
-
-    const [download] = await Promise.all([
-      this.pageAlt!.waitForEvent('download', { timeout: 30000 }),
-      foundBtn.click(),
-    ]);
-
-    excelPath = path.join(this.downloadPath, `ReporteFilter_${Date.now()}.xlsx`);
-    await download.saveAs(excelPath);
-    console.log(`✅ [FILTER] Archivo descargado exitosamente en: ${excelPath}`);
+    const excelPath = await this.triggerExcelDownload(
+      this.pageAlt,
+      'ReporteFilter',
+    );
 
     if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
-      console.log(`💾 [FILTER] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`);
+      console.log(
+        `💾 [FILTER] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
+      );
       return {
         success: true,
-        message: 'Excel descargado con filtro de fecha (modo prueba: no enviado a Laravel)',
+        message:
+          'Excel descargado con filtro de fecha (modo prueba: no enviado a Laravel)',
         excelPath,
         fechaFiltro: fecha,
         laravelResponse: { skipped: true },
@@ -922,7 +1030,8 @@ export class AutomationService {
 
     return {
       success: true,
-      message: 'Excel descargado con filtro de fecha y enviado a Laravel exitosamente',
+      message:
+        'Excel descargado con filtro de fecha y enviado a Laravel exitosamente',
       excelPath,
       fechaFiltro: fecha,
       laravelResponse,
@@ -933,11 +1042,14 @@ export class AutomationService {
 
   /* ─────────── MAIN CINEBOL ─────────── */
 
-  async downloadExcelAndSendToLaravelCinebol(fecha?: string, skipLaravel: boolean = false) {
-    let excelPath = '';
-
+  async downloadExcelAndSendToLaravelCinebol(
+    fecha?: string,
+    skipLaravel: boolean = false,
+  ) {
     if (!this.browserCinebol || !this.pageCinebol) {
-      console.log('🆕 [CINEBOL] Iniciando nueva sesión del navegador (Cinebol)...');
+      console.log(
+        '🆕 [CINEBOL] Iniciando nueva sesión del navegador (Cinebol)...',
+      );
       const init = await this.initializeBrowser();
       this.browserCinebol = init.browser;
       this.pageCinebol = init.page;
@@ -948,7 +1060,9 @@ export class AutomationService {
     } else {
       console.log('♻️ [CINEBOL] Reutilizando navegador existente (Cinebol)...');
       if (!(await this.isAlreadyLoggedIn(this.pageCinebol))) {
-        console.log('🔑 [CINEBOL] Sesión no iniciada o vencida. Realizando login...');
+        console.log(
+          '🔑 [CINEBOL] Sesión no iniciada o vencida. Realizando login...',
+        );
         if (!(await this.performLoginCinebol(this.pageCinebol))) {
           throw new Error('Falló el login con credenciales de Cinebol');
         }
@@ -958,47 +1072,29 @@ export class AutomationService {
     }
 
     const fechaFiltro = fecha || this.getTodayBolivia();
-    console.log(`🔄 [CINEBOL] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`);
-    const updated = await this.updateReportData(this.pageCinebol!, fechaFiltro);
+    console.log(
+      `🔄 [CINEBOL] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
+    );
+    const updated = await this.updateReportData(this.pageCinebol, fechaFiltro);
     if (!updated) {
-      console.warn('⚠️ [CINEBOL] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...');
-    }
-
-    console.log('🔍 [CINEBOL] Buscando botón "Exportar a Excel"...');
-    
-    const foundBtn: Locator = this.pageCinebol!.locator(this.excelBtnSelector).first();
-    
-    await this.randomDelay(2000, 3000);
-    await this.pageCinebol!.evaluate(() => window.scrollTo(0, 0));
-    await this.randomDelay(500, 1000);
-
-    try {
-      await foundBtn.waitFor({ state: 'visible', timeout: 20000 });
-    } catch (e) {
-      console.error('❌ [CINEBOL] No se encontró el botón "Exportar a Excel"');
-      await this.saveDebugSnapshot(this.pageCinebol!, 'cinebol_sin_boton_excel');
-      throw new Error(
-        'No se encontró el botón "Exportar a Excel". Revisa la captura en descargas/ para ver qué muestra la página.',
+      console.warn(
+        '⚠️ [CINEBOL] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
       );
     }
 
-    console.log('⬇️ [CINEBOL] Iniciando clic en exportar y esperando descarga...');
-    await foundBtn.scrollIntoViewIfNeeded();
-
-    const [download] = await Promise.all([
-      this.pageCinebol!.waitForEvent('download', { timeout: 30000 }),
-      foundBtn.click(),
-    ]);
-
-    excelPath = path.join(this.downloadPath, `ReporteCinebol_${Date.now()}.xlsx`);
-    await download.saveAs(excelPath);
-    console.log(`✅ [CINEBOL] Archivo descargado exitosamente en: ${excelPath}`);
+    const excelPath = await this.triggerExcelDownload(
+      this.pageCinebol,
+      'ReporteCinebol',
+    );
 
     if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
-      console.log(`💾 [CINEBOL] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`);
+      console.log(
+        `💾 [CINEBOL] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
+      );
       return {
         success: true,
-        message: 'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
+        message:
+          'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
         excelPath,
         fechaFiltro,
         laravelResponse: { skipped: true },
@@ -1011,7 +1107,8 @@ export class AutomationService {
 
     return {
       success: true,
-      message: 'Excel descargado y enviado a Laravel exitosamente (usando credenciales Cinebol)',
+      message:
+        'Excel descargado y enviado a Laravel exitosamente (usando credenciales Cinebol)',
       excelPath,
       fechaFiltro,
       laravelResponse,
@@ -1022,11 +1119,14 @@ export class AutomationService {
 
   /* ─────────── MAIN CON FILTRO FECHA (CINEBOL) ─────────── */
 
-  async downloadExcelWithDateFilterCinebol(fecha: string, skipLaravel: boolean = false) {
-    let excelPath = '';
-
+  async downloadExcelWithDateFilterCinebol(
+    fecha: string,
+    skipLaravel: boolean = false,
+  ) {
     if (!this.browserCinebol || !this.pageCinebol) {
-      console.log('🆕 [FILTER-CINEBOL] Iniciando nueva sesión con filtro de fecha...');
+      console.log(
+        '🆕 [FILTER-CINEBOL] Iniciando nueva sesión con filtro de fecha...',
+      );
       const init = await this.initializeBrowser();
       this.browserCinebol = init.browser;
       this.pageCinebol = init.page;
@@ -1037,7 +1137,9 @@ export class AutomationService {
     } else {
       console.log('♻️ [FILTER-CINEBOL] Reutilizando navegador existente...');
       if (!(await this.isAlreadyLoggedIn(this.pageCinebol))) {
-        console.log('🔑 [FILTER-CINEBOL] Sesión no iniciada o vencida. Realizando login...');
+        console.log(
+          '🔑 [FILTER-CINEBOL] Sesión no iniciada o vencida. Realizando login...',
+        );
         if (!(await this.performLoginCinebol(this.pageCinebol))) {
           throw new Error('Falló el login con credenciales de Cinebol');
         }
@@ -1047,48 +1149,26 @@ export class AutomationService {
     }
 
     console.log(`📅 [FILTER-CINEBOL] Aplicando filtro de fecha: ${fecha}...`);
-    const filterApplied = await this.updateReportData(this.pageCinebol!, fecha);
+    const filterApplied = await this.updateReportData(this.pageCinebol, fecha);
     if (!filterApplied) {
       throw new Error(
         `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
       );
     }
 
-    console.log('🔍 [FILTER-CINEBOL] Buscando botón "Exportar a Excel"...');
-    
-    const foundBtn: Locator = this.pageCinebol!.locator(this.excelBtnSelector).first();
-    
-    await this.randomDelay(2000, 3000);
-    await this.pageCinebol!.evaluate(() => window.scrollTo(0, 0));
-    await this.randomDelay(500, 1000);
-
-    try {
-      await foundBtn.waitFor({ state: 'visible', timeout: 20000 });
-    } catch (e) {
-      console.error('❌ [FILTER-CINEBOL] No se encontró el botón "Exportar a Excel"');
-      await this.saveDebugSnapshot(this.pageCinebol!, 'filter_cinebol_sin_boton_excel');
-      throw new Error(
-        'No se encontró el botón "Exportar a Excel" tras filtrar por fecha.',
-      );
-    }
-
-    console.log('⬇️ [FILTER-CINEBOL] Iniciando clic en exportar y esperando descarga...');
-    await foundBtn.scrollIntoViewIfNeeded();
-
-    const [download] = await Promise.all([
-      this.pageCinebol!.waitForEvent('download', { timeout: 30000 }),
-      foundBtn.click(),
-    ]);
-
-    excelPath = path.join(this.downloadPath, `ReporteFilterCinebol_${Date.now()}.xlsx`);
-    await download.saveAs(excelPath);
-    console.log(`✅ [FILTER-CINEBOL] Archivo descargado exitosamente en: ${excelPath}`);
+    const excelPath = await this.triggerExcelDownload(
+      this.pageCinebol,
+      'ReporteFilterCinebol',
+    );
 
     if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
-      console.log(`💾 [FILTER-CINEBOL] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`);
+      console.log(
+        `💾 [FILTER-CINEBOL] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
+      );
       return {
         success: true,
-        message: 'Excel descargado con filtro de fecha (modo prueba: no enviado a Laravel)',
+        message:
+          'Excel descargado con filtro de fecha (modo prueba: no enviado a Laravel)',
         excelPath,
         fechaFiltro: fecha,
         laravelResponse: { skipped: true },
@@ -1101,7 +1181,8 @@ export class AutomationService {
 
     return {
       success: true,
-      message: 'Excel descargado con filtro de fecha y enviado a Laravel exitosamente (usando credenciales Cinebol)',
+      message:
+        'Excel descargado con filtro de fecha y enviado a Laravel exitosamente (usando credenciales Cinebol)',
       excelPath,
       fechaFiltro: fecha,
       laravelResponse,

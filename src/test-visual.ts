@@ -17,7 +17,9 @@ async function runVisualTest() {
   console.log('🚀 INICIANDO BATERÍA DE PRUEBAS VISUALES BCP');
   console.log('====================================================');
   console.log('👀 El navegador se abrirá en tu pantalla (SlowMo: 400ms).');
-  console.log('💡 Modo prueba activo: Los archivos Excel se conservarán en ./descargas');
+  console.log(
+    '💡 Modo prueba activo: Los archivos Excel se conservarán en ./descargas',
+  );
   console.log('🛡️ No se enviará información al backend de Laravel.\n');
 
   const app = await NestFactory.createApplicationContext(AppModule);
@@ -33,13 +35,24 @@ async function runVisualTest() {
       console.log('▶️ [PRUEBA 1/3] Flujo Principal (Usuario: CajaUno11929)');
       console.log('====================================================');
       try {
-        const result = await automationService.downloadExcelAndSendToLaravel(undefined, true);
+        const result = await automationService.downloadExcelAndSendToLaravel(
+          undefined,
+          true,
+        );
         console.log('🎉 [PRUEBA 1] Éxito:', result.message);
         console.log(`📁 Archivo generado: ${result.excelPath}`);
-        results.push({ name: 'Flujo Principal (CajaUno)', success: true, file: result.excelPath });
+        results.push({
+          name: 'Flujo Principal (CajaUno)',
+          success: true,
+          file: result.excelPath,
+        });
       } catch (err: any) {
         console.error('❌ [PRUEBA 1] Error en Flujo Principal:', err.message);
-        results.push({ name: 'Flujo Principal (CajaUno)', success: false, error: err.message });
+        results.push({
+          name: 'Flujo Principal (CajaUno)',
+          success: false,
+          error: err.message,
+        });
       }
 
       console.log('⏳ Pausa de 5 segundos para visualización...');
@@ -50,16 +63,29 @@ async function runVisualTest() {
     // ────────── TEST 2: FLUJO ALTERNATIVO ──────────
     if (testType === 'all' || testType === 'alt') {
       console.log('\n====================================================');
-      console.log('▶️ [PRUEBA 2/3] Flujo Alternativo (Usuario: CajaLive114559)');
+      console.log(
+        '▶️ [PRUEBA 2/3] Flujo Alternativo (Usuario: CajaLive114559)',
+      );
       console.log('====================================================');
       try {
-        const result = await automationService.downloadExcelAndSendToLaravelAlt(undefined, true);
+        const result = await automationService.downloadExcelAndSendToLaravelAlt(
+          undefined,
+          true,
+        );
         console.log('🎉 [PRUEBA 2] Éxito:', result.message);
         console.log(`📁 Archivo generado: ${result.excelPath}`);
-        results.push({ name: 'Flujo Alternativo (CajaLive)', success: true, file: result.excelPath });
+        results.push({
+          name: 'Flujo Alternativo (CajaLive)',
+          success: true,
+          file: result.excelPath,
+        });
       } catch (err: any) {
         console.error('❌ [PRUEBA 2] Error en Flujo Alternativo:', err.message);
-        results.push({ name: 'Flujo Alternativo (CajaLive)', success: false, error: err.message });
+        results.push({
+          name: 'Flujo Alternativo (CajaLive)',
+          success: false,
+          error: err.message,
+        });
       }
 
       console.log('⏳ Pausa de 5 segundos para visualización...');
@@ -73,13 +99,25 @@ async function runVisualTest() {
       console.log('▶️ [PRUEBA 3] Flujo Cinebol (Usuario: CajaCinebol172131)');
       console.log('====================================================');
       try {
-        const result = await automationService.downloadExcelAndSendToLaravelCinebol(undefined, true);
+        const result =
+          await automationService.downloadExcelAndSendToLaravelCinebol(
+            undefined,
+            true,
+          );
         console.log('🎉 [PRUEBA 3] Éxito:', result.message);
         console.log(`📁 Archivo generado: ${result.excelPath}`);
-        results.push({ name: 'Flujo Cinebol (CajaCinebol)', success: true, file: result.excelPath });
+        results.push({
+          name: 'Flujo Cinebol (CajaCinebol)',
+          success: true,
+          file: result.excelPath,
+        });
       } catch (err: any) {
         console.error('❌ [PRUEBA 3] Error en Flujo Cinebol:', err.message);
-        results.push({ name: 'Flujo Cinebol (CajaCinebol)', success: false, error: err.message });
+        results.push({
+          name: 'Flujo Cinebol (CajaCinebol)',
+          success: false,
+          error: err.message,
+        });
       }
 
       console.log('⏳ Pausa de 5 segundos para visualización...');
@@ -91,16 +129,32 @@ async function runVisualTest() {
     if (testType === 'all' || testType === 'filter') {
       const hoy = automationService.getTodayBolivia();
       console.log('\n====================================================');
-      console.log(`▶️ [PRUEBA 4] Flujo con Filtro de Fecha (${hoy}) (CajaLive)`);
+      console.log(
+        `▶️ [PRUEBA 4] Flujo con Filtro de Fecha (${hoy}) (CajaLive)`,
+      );
       console.log('====================================================');
       try {
-        const result = await automationService.downloadExcelWithDateFilter(hoy, true);
+        const result = await automationService.downloadExcelWithDateFilter(
+          hoy,
+          true,
+        );
         console.log('🎉 [PRUEBA 3] Éxito:', result.message);
         console.log(`📁 Archivo generado: ${result.excelPath}`);
-        results.push({ name: `Filtro de Fecha (${hoy})`, success: true, file: result.excelPath });
+        results.push({
+          name: `Filtro de Fecha (${hoy})`,
+          success: true,
+          file: result.excelPath,
+        });
       } catch (err: any) {
-        console.error('❌ [PRUEBA 3] Error en Flujo con Filtro de Fecha:', err.message);
-        results.push({ name: `Filtro de Fecha (${hoy})`, success: false, error: err.message });
+        console.error(
+          '❌ [PRUEBA 3] Error en Flujo con Filtro de Fecha:',
+          err.message,
+        );
+        results.push({
+          name: `Filtro de Fecha (${hoy})`,
+          success: false,
+          error: err.message,
+        });
       }
 
       console.log('⏳ Pausa de 5 segundos para visualización...');
@@ -119,7 +173,6 @@ async function runVisualTest() {
       if (res.error) console.log(`    ⚠️ Error: ${res.error}`);
     });
     console.log('====================================================\n');
-
   } catch (error: any) {
     console.error('\n❌ [ERROR CRÍTICO GENERAL]:', error.message);
   } finally {

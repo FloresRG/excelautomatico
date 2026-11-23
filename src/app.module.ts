@@ -5,7 +5,8 @@ import { AutomationModule } from './automation/automation.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({  // 👈 Configurar para leer .env
+    ConfigModule.forRoot({
+      // 👈 Configurar para leer .env
       isGlobal: true,
       envFilePath: ['.env'],
     }),
