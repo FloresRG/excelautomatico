@@ -19,6 +19,8 @@ export class AutomationService {
   // 👈 CAMBIO 1: Selector más flexible y robusto para encontrar el botón de Excel
   private readonly excelBtnSelector =
     'button.buttons-excel, a.buttons-excel, button:has-text("Excel"), a:has-text("Excel"), [title*="Excel"], [class*="buttons-excel"]';
+  private readonly reportDetailUrl =
+    'https://apppro.bcp.com.bo/Multiplica/ReportDetail';
 
   private browser: Browser | null = null;
   private page: Page | null = null;
@@ -481,6 +483,9 @@ export class AutomationService {
       // Si ya navegó al dashboard o ya tiene el botón de Excel, éxito inmediato
       if (await this.isAlreadyLoggedIn(page)) {
         console.log(`📍 [LOGIN-ALT] URL tras autenticación: ${page.url()}`);
+        if (!page.url().toLowerCase().includes('reportdetail')) {
+          await this.ensureReportDetailPage(page);
+        }
         this.isLoggedInAlt = true;
         this.currentPageUrlAlt = page.url();
         return true;
@@ -495,6 +500,9 @@ export class AutomationService {
       }
 
       console.log(`📍 [LOGIN-ALT] URL tras autenticación: ${page.url()}`);
+      if (!page.url().toLowerCase().includes('reportdetail')) {
+        await this.ensureReportDetailPage(page);
+      }
 
       this.isLoggedInAlt = true;
       this.currentPageUrlAlt = page.url();
@@ -639,17 +647,67 @@ export class AutomationService {
     }).format(new Date());
   }
 
-  private async refreshPageForLatestData(page: Page) {
-    const hasReportControls = await page.$('#startDate1').catch(() => null);
-    if (!hasReportControls) {
+  /**
+   * Garantiza que el navegador esté ubicado en la página de reporte (/Multiplica/ReportDetail)
+   * y que los controles (#startDate1, #fondoreportes) estén presentes en el DOM.
+   */
+  private async ensureReportDetailPage(page: Page): Promise<boolean> {
+    try {
+      if (!page || page.isClosed()) return false;
+      const currentUrl = page.url().toLowerCase();
+      const hasControls = await page.$('#startDate1').catch(() => null);
+
+      if (currentUrl.includes('reportdetail') && hasControls) {
+        return true;
+      }
+
       console.log(
-        '🔄 [REFRESH] Controles no detectados en DOM. Recargando página...',
+        `🌐 [NAV] Asegurando página ReportDetail (${this.reportDetailUrl})...`,
       );
-      await page.reload({
+      await page.goto(this.reportDetailUrl, {
         waitUntil: 'domcontentloaded',
-        timeout: 25000,
+        timeout: 35000,
       });
-      await this.randomDelay(200, 400);
+      await this.randomDelay(300, 600);
+
+      // Esperar a que el campo startDate1 aparezca
+      const inputField = await page
+        .waitForSelector('#startDate1', { timeout: 15000 })
+        .catch(() => null);
+
+      if (inputField) {
+        console.log(
+          '✅ [NAV] Página ReportDetail cargada y controles detectados.',
+        );
+        return true;
+      }
+
+      // Si por alguna razón no se detectó startDate1 de inmediato, comprobar botón Excel
+      const hasExcel = await page.$(this.excelBtnSelector).catch(() => null);
+      if (hasExcel) {
+        console.log('✅ [NAV] Botón de exportación detectado en ReportDetail.');
+        return true;
+      }
+
+      console.warn(
+        '⚠️ [NAV] No se detectaron controles inmediatamente tras navegación a ReportDetail.',
+      );
+      return false;
+    } catch (error: any) {
+      console.error('❌ [NAV] Error al navegar a ReportDetail:', error.message);
+      return false;
+    }
+  }
+
+  private async refreshPageForLatestData(page: Page) {
+    const currentUrl = page.url().toLowerCase();
+    const hasReportControls = await page.$('#startDate1').catch(() => null);
+
+    if (!currentUrl.includes('reportdetail') || !hasReportControls) {
+      console.log(
+        '🔄 [REFRESH] Página no es ReportDetail o controles no detectados en DOM. Navegando a ReportDetail...',
+      );
+      await this.ensureReportDetailPage(page);
     } else {
       console.log(
         '⚡ [FAST] Controles de reporte listos en memoria. Continuando sin reload innecesario.',
@@ -667,12 +725,25 @@ export class AutomationService {
     );
 
     try {
+      // Asegurar que la página está en ReportDetail con controles listos
+      await this.ensureReportDetailPage(page);
+
       console.log(
         '🔍 [REPORT-UPDATE] Buscando campo de fecha (#startDate1)...',
       );
-      const inputField = await page
+      let inputField = await page
         .waitForSelector('#startDate1', { timeout: 10000 })
         .catch(() => null);
+
+      if (!inputField) {
+        console.log(
+          '⚠️ [REPORT-UPDATE] No se detectó #startDate1, reintentando navegación a ReportDetail...',
+        );
+        await this.ensureReportDetailPage(page);
+        inputField = await page
+          .waitForSelector('#startDate1', { timeout: 10000 })
+          .catch(() => null);
+      }
 
       if (!inputField) {
         console.error(
@@ -758,16 +829,24 @@ export class AutomationService {
     try {
       await foundBtn.waitFor({ state: 'visible', timeout: 15000 });
     } catch (_e) {
-      console.error(
-        `❌ [${filePrefix}] No se encontró el botón "Exportar a Excel"`,
+      console.warn(
+        `⚠️ [${filePrefix}] Botón no visible de inmediato. Verificando ReportDetail...`,
       );
-      await this.saveDebugSnapshot(
-        page,
-        `${filePrefix.toLowerCase()}_sin_boton_excel`,
-      );
-      throw new Error(
-        'No se encontró el botón "Exportar a Excel". Revisa la captura en descargas/ para ver qué muestra la página.',
-      );
+      await this.ensureReportDetailPage(page);
+      try {
+        await foundBtn.waitFor({ state: 'visible', timeout: 15000 });
+      } catch (_e2) {
+        console.error(
+          `❌ [${filePrefix}] No se encontró el botón "Exportar a Excel"`,
+        );
+        await this.saveDebugSnapshot(
+          page,
+          `${filePrefix.toLowerCase()}_sin_boton_excel`,
+        );
+        throw new Error(
+          'No se encontró el botón "Exportar a Excel". Revisa la captura en descargas/ para ver qué muestra la página.',
+        );
+      }
     }
 
     console.log(
