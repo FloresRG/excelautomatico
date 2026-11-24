@@ -746,6 +746,177 @@ export class AutomationService {
     }
   }
 
+  /* ─────────── VERIFICACIÓN DE REGISTROS EN TABLA ─────────── */
+
+  /**
+   * Verifica si la tabla de reportes contiene registros reales o si está vacía
+   */
+  private async hasTableRecords(
+    page: Page,
+    prefix: string = 'REPORT',
+  ): Promise<{ hasRecords: boolean; count: number; infoText: string }> {
+    try {
+      // 1. Esperar a que la tabla o el indicador de info estén disponibles en el DOM
+      await page
+        .waitForSelector('#table, #table_info, .dataTables_info', {
+          timeout: 10000,
+        })
+        .catch(() => null);
+
+      // Esperar a que termine cualquier indicador de procesamiento de DataTables
+      await page
+        .waitForSelector(
+          '.dataTables_processing, .blockUI, div[id*="loading"], div[class*="loading"]',
+          { state: 'hidden', timeout: 8000 },
+        )
+        .catch(() => null);
+
+      // Pausa breve para asentar la renderización de filas tras el filtro
+      await this.randomDelay(400, 700);
+
+      const result = await page.evaluate(() => {
+        const infoEl = document.querySelector('#table_info, .dataTables_info');
+        const infoText = infoEl ? (infoEl.textContent || '').trim() : '';
+
+        // 1. Si el propio DataTables dice explícitamente 0 registros
+        if (infoText) {
+          const zeroPatterns = [
+            /total de 0\b/i,
+            /del 0 al 0\b/i,
+            /0 a 0 de 0\b/i,
+            /0 de un total de 0\b/i,
+            /0 registros\b/i,
+            /no entries\b/i,
+          ];
+          for (const pattern of zeroPatterns) {
+            if (pattern.test(infoText)) {
+              return { hasRecords: false, count: 0, infoText };
+            }
+          }
+        }
+
+        // 2. Revisar si hay celda con la clase oficial de vacío de DataTables (.dataTables_empty)
+        const emptyCell = document.querySelector(
+          '#table tbody td.dataTables_empty, table.dataTable tbody td.dataTables_empty, .dataTables_empty',
+        );
+        if (emptyCell) {
+          return {
+            hasRecords: false,
+            count: 0,
+            infoText:
+              emptyCell.textContent?.trim() || 'Sin registros (dataTables_empty)',
+          };
+        }
+
+        // 3. Inspeccionar directamente las filas del tbody
+        const rows = Array.from(
+          document.querySelectorAll(
+            '#table tbody tr, table.dataTable tbody tr',
+          ),
+        );
+        if (!rows || rows.length === 0) {
+          return { hasRecords: false, count: 0, infoText: 'Tbody sin filas' };
+        }
+
+        // 4. Analizar cada fila individual para verificar si contiene DATOS REALES
+        // A veces el backend/DataTables genera 1 fila pero con celdas completamente en blanco
+        const emptyPhrases = [
+          'ningún dato',
+          'ningun dato',
+          'no hay datos',
+          'no se encontraron',
+          'no matching records',
+          'sin datos',
+          'sin registros',
+        ];
+
+        const validRows = rows.filter((row) => {
+          // Si tiene clase de vacío
+          if (
+            row.classList.contains('dataTables_empty') ||
+            row.querySelector('td.dataTables_empty')
+          ) {
+            return false;
+          }
+
+          const cells = Array.from(row.querySelectorAll('td'));
+          if (cells.length === 0) return false;
+
+          // Concatenar el contenido de texto de todas las celdas
+          const rawText = cells.map((c) => c.textContent || '').join(' ').trim();
+          const cleanText = rawText.replace(/[\s\u00a0\t\r\n]/g, '');
+
+          // Si todas las celdas están completamente en blanco (fila fantasma con celdas vacías)
+          if (cleanText.length === 0) {
+            return false;
+          }
+
+          // Si el texto es una frase de tabla vacía
+          const lowerRaw = rawText.toLowerCase();
+          for (const phrase of emptyPhrases) {
+            if (lowerRaw.includes(phrase)) {
+              return false;
+            }
+          }
+
+          // Para que sea un registro bancario real, debe tener al menos dígitos o letras significativas
+          const hasDigits = /\d/.test(cleanText);
+          const hasLetters = /[a-zA-Z]/.test(cleanText);
+
+          if (!hasDigits && !hasLetters) {
+            return false;
+          }
+
+          // En una transacción real hay Cliente, Fecha, Monto, Banco, etc.
+          // Comprobamos que existan al menos 2 celdas con contenido real no vacío ni guiones
+          const nonEmptyCells = cells.filter((c) => {
+            const t = (c.textContent || '').replace(/[\s\u00a0]/g, '');
+            return t.length > 0 && t !== '-';
+          });
+
+          if (nonEmptyCells.length < 2) {
+            return false;
+          }
+
+          return true;
+        });
+
+        if (validRows.length === 0) {
+          return {
+            hasRecords: false,
+            count: 0,
+            infoText: infoText
+              ? `${infoText} (pero las celdas están vacías/sin datos reales)`
+              : 'Fila vacía sin datos reales',
+          };
+        }
+
+        return {
+          hasRecords: true,
+          count: validRows.length,
+          infoText: infoText || `${validRows.length} registros válidos`,
+        };
+      });
+
+      if (!result.hasRecords) {
+        console.log(
+          `ℹ️ [${prefix}] Verificación: NO existen registros válidos en la tabla. Detalle: "${result.infoText}".`,
+        );
+      } else {
+        console.log(
+          `📊 [${prefix}] Verificación: Se encontraron registros reales en la tabla (${result.count}). Info: "${result.infoText}".`,
+        );
+      }
+
+      return result;
+    } catch (error: any) {
+      console.warn(
+        `⚠️ [${prefix}] Error al verificar registros en la tabla: ${error.message}. Continuando con flujo normal.`,
+      );
+      return { hasRecords: true, count: -1, infoText: 'Error en verificación' };
+    }
+  }
+
   /* ─────────── DESCARGA EXCEL OPTIMIZADA ─────────── */
 
   private async triggerExcelDownload(
@@ -775,20 +946,37 @@ export class AutomationService {
     );
     await foundBtn.scrollIntoViewIfNeeded();
 
-    const [download] = await Promise.all([
-      page.waitForEvent('download', { timeout: 30000 }),
-      foundBtn.click(),
-    ]);
+    try {
+      const [download] = await Promise.all([
+        page.waitForEvent('download', { timeout: 30000 }),
+        foundBtn.click(),
+      ]);
 
-    const excelPath = path.join(
-      this.downloadPath,
-      `${filePrefix}_${Date.now()}.xlsx`,
-    );
-    await download.saveAs(excelPath);
-    console.log(
-      `✅ [${filePrefix}] Archivo descargado exitosamente en: ${excelPath}`,
-    );
-    return excelPath;
+      const excelPath = path.join(
+        this.downloadPath,
+        `${filePrefix}_${Date.now()}.xlsx`,
+      );
+      await download.saveAs(excelPath);
+      console.log(
+        `✅ [${filePrefix}] Archivo descargado exitosamente en: ${excelPath}`,
+      );
+      return excelPath;
+    } catch (error: any) {
+      if (
+        error.name === 'TimeoutError' ||
+        error.message?.includes('Timeout') ||
+        error.message?.includes('download')
+      ) {
+        console.error(
+          `❌ [${filePrefix}] Timeout esperando el evento de descarga: ${error.message}. Es probable que no existan datos para exportar.`,
+        );
+        await this.saveDebugSnapshot(
+          page,
+          `${filePrefix.toLowerCase()}_download_timeout`,
+        );
+      }
+      throw error;
+    }
   }
 
   /* ─────────── ELIMINAR ARCHIVO ─────────── */
@@ -1004,6 +1192,24 @@ export class AutomationService {
       );
     }
 
+    const tableStatus = await this.hasTableRecords(page, 'MAIN');
+    if (!tableStatus.hasRecords) {
+      console.log(
+        `ℹ️ [MAIN] No existen registros en la tabla para la fecha ${fechaFiltro}. Se omite la descarga de Excel.`,
+      );
+      return {
+        success: false,
+        hasRecords: false,
+        message: `No existen registros para la fecha ${fechaFiltro}`,
+        fechaFiltro,
+        registros: 0,
+        infoTabla: tableStatus.infoText,
+        laravelResponse: null,
+        timestamp: new Date().toISOString(),
+        reusedSession: this.isLoggedIn,
+      };
+    }
+
     const excelPath = await this.triggerExcelDownload(page, 'Reporte');
 
     if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
@@ -1052,6 +1258,24 @@ export class AutomationService {
       console.warn(
         '⚠️ [ALT] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
       );
+    }
+
+    const tableStatus = await this.hasTableRecords(page, 'ALT');
+    if (!tableStatus.hasRecords) {
+      console.log(
+        `ℹ️ [ALT] No existen registros en la tabla para la fecha ${fechaFiltro}. Se omite la descarga de Excel.`,
+      );
+      return {
+        success: false,
+        hasRecords: false,
+        message: `No existen registros para la fecha ${fechaFiltro}`,
+        fechaFiltro,
+        registros: 0,
+        infoTabla: tableStatus.infoText,
+        laravelResponse: null,
+        timestamp: new Date().toISOString(),
+        reusedSession: this.isLoggedInAlt,
+      };
     }
 
     const excelPath = await this.triggerExcelDownload(
@@ -1103,6 +1327,24 @@ export class AutomationService {
       throw new Error(
         `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
       );
+    }
+
+    const tableStatus = await this.hasTableRecords(page, 'ReporteFilter');
+    if (!tableStatus.hasRecords) {
+      console.log(
+        `ℹ️ [FILTER] No existen registros en la tabla para la fecha ${fecha}. Se omite la descarga de Excel.`,
+      );
+      return {
+        success: false,
+        hasRecords: false,
+        message: `No existen registros para la fecha ${fecha}`,
+        fechaFiltro: fecha,
+        registros: 0,
+        infoTabla: tableStatus.infoText,
+        laravelResponse: null,
+        timestamp: new Date().toISOString(),
+        reusedSession: this.isLoggedInAlt,
+      };
     }
 
     const excelPath = await this.triggerExcelDownload(
@@ -1159,6 +1401,24 @@ export class AutomationService {
       );
     }
 
+    const tableStatus = await this.hasTableRecords(page, 'CINEBOL');
+    if (!tableStatus.hasRecords) {
+      console.log(
+        `ℹ️ [CINEBOL] No existen registros en la tabla para la fecha ${fechaFiltro}. Se omite la descarga de Excel.`,
+      );
+      return {
+        success: false,
+        hasRecords: false,
+        message: `No existen registros para la fecha ${fechaFiltro}`,
+        fechaFiltro,
+        registros: 0,
+        infoTabla: tableStatus.infoText,
+        laravelResponse: null,
+        timestamp: new Date().toISOString(),
+        reusedSession: this.isLoggedInCinebol,
+      };
+    }
+
     const excelPath = await this.triggerExcelDownload(
       page,
       'ReporteCinebol',
@@ -1208,6 +1468,27 @@ export class AutomationService {
       throw new Error(
         `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
       );
+    }
+
+    const tableStatus = await this.hasTableRecords(
+      page,
+      'ReporteFilterCinebol',
+    );
+    if (!tableStatus.hasRecords) {
+      console.log(
+        `ℹ️ [FILTER-CINEBOL] No existen registros en la tabla para la fecha ${fecha}. Se omite la descarga de Excel.`,
+      );
+      return {
+        success: false,
+        hasRecords: false,
+        message: `No existen registros para la fecha ${fecha}`,
+        fechaFiltro: fecha,
+        registros: 0,
+        infoTabla: tableStatus.infoText,
+        laravelResponse: null,
+        timestamp: new Date().toISOString(),
+        reusedSession: this.isLoggedInCinebol,
+      };
     }
 
     const excelPath = await this.triggerExcelDownload(
