@@ -19,8 +19,6 @@ export class AutomationService {
   // 👈 CAMBIO 1: Selector más flexible y robusto para encontrar el botón de Excel
   private readonly excelBtnSelector =
     'button.buttons-excel, a.buttons-excel, button:has-text("Excel"), a:has-text("Excel"), [title*="Excel"], [class*="buttons-excel"]';
-  private readonly reportDetailUrl =
-    'https://apppro.bcp.com.bo/Multiplica/ReportDetail';
 
   private browser: Browser | null = null;
   private page: Page | null = null;
@@ -483,9 +481,6 @@ export class AutomationService {
       // Si ya navegó al dashboard o ya tiene el botón de Excel, éxito inmediato
       if (await this.isAlreadyLoggedIn(page)) {
         console.log(`📍 [LOGIN-ALT] URL tras autenticación: ${page.url()}`);
-        if (!page.url().toLowerCase().includes('reportdetail')) {
-          await this.ensureReportDetailPage(page);
-        }
         this.isLoggedInAlt = true;
         this.currentPageUrlAlt = page.url();
         return true;
@@ -500,9 +495,6 @@ export class AutomationService {
       }
 
       console.log(`📍 [LOGIN-ALT] URL tras autenticación: ${page.url()}`);
-      if (!page.url().toLowerCase().includes('reportdetail')) {
-        await this.ensureReportDetailPage(page);
-      }
 
       this.isLoggedInAlt = true;
       this.currentPageUrlAlt = page.url();
@@ -647,67 +639,17 @@ export class AutomationService {
     }).format(new Date());
   }
 
-  /**
-   * Garantiza que el navegador esté ubicado en la página de reporte (/Multiplica/ReportDetail)
-   * y que los controles (#startDate1, #fondoreportes) estén presentes en el DOM.
-   */
-  private async ensureReportDetailPage(page: Page): Promise<boolean> {
-    try {
-      if (!page || page.isClosed()) return false;
-      const currentUrl = page.url().toLowerCase();
-      const hasControls = await page.$('#startDate1').catch(() => null);
-
-      if (currentUrl.includes('reportdetail') && hasControls) {
-        return true;
-      }
-
-      console.log(
-        `🌐 [NAV] Asegurando página ReportDetail (${this.reportDetailUrl})...`,
-      );
-      await page.goto(this.reportDetailUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 35000,
-      });
-      await this.randomDelay(300, 600);
-
-      // Esperar a que el campo startDate1 aparezca
-      const inputField = await page
-        .waitForSelector('#startDate1', { timeout: 15000 })
-        .catch(() => null);
-
-      if (inputField) {
-        console.log(
-          '✅ [NAV] Página ReportDetail cargada y controles detectados.',
-        );
-        return true;
-      }
-
-      // Si por alguna razón no se detectó startDate1 de inmediato, comprobar botón Excel
-      const hasExcel = await page.$(this.excelBtnSelector).catch(() => null);
-      if (hasExcel) {
-        console.log('✅ [NAV] Botón de exportación detectado en ReportDetail.');
-        return true;
-      }
-
-      console.warn(
-        '⚠️ [NAV] No se detectaron controles inmediatamente tras navegación a ReportDetail.',
-      );
-      return false;
-    } catch (error: any) {
-      console.error('❌ [NAV] Error al navegar a ReportDetail:', error.message);
-      return false;
-    }
-  }
-
   private async refreshPageForLatestData(page: Page) {
-    const currentUrl = page.url().toLowerCase();
     const hasReportControls = await page.$('#startDate1').catch(() => null);
-
-    if (!currentUrl.includes('reportdetail') || !hasReportControls) {
+    if (!hasReportControls) {
       console.log(
-        '🔄 [REFRESH] Página no es ReportDetail o controles no detectados en DOM. Navegando a ReportDetail...',
+        '🔄 [REFRESH] Controles no detectados en DOM. Recargando página...',
       );
-      await this.ensureReportDetailPage(page);
+      await page.reload({
+        waitUntil: 'domcontentloaded',
+        timeout: 25000,
+      });
+      await this.randomDelay(200, 400);
     } else {
       console.log(
         '⚡ [FAST] Controles de reporte listos en memoria. Continuando sin reload innecesario.',
@@ -725,25 +667,12 @@ export class AutomationService {
     );
 
     try {
-      // Asegurar que la página está en ReportDetail con controles listos
-      await this.ensureReportDetailPage(page);
-
       console.log(
         '🔍 [REPORT-UPDATE] Buscando campo de fecha (#startDate1)...',
       );
-      let inputField = await page
+      const inputField = await page
         .waitForSelector('#startDate1', { timeout: 10000 })
         .catch(() => null);
-
-      if (!inputField) {
-        console.log(
-          '⚠️ [REPORT-UPDATE] No se detectó #startDate1, reintentando navegación a ReportDetail...',
-        );
-        await this.ensureReportDetailPage(page);
-        inputField = await page
-          .waitForSelector('#startDate1', { timeout: 10000 })
-          .catch(() => null);
-      }
 
       if (!inputField) {
         console.error(
@@ -790,21 +719,15 @@ export class AutomationService {
       console.log(
         '⏳ [REPORT-UPDATE] Esperando respuesta del servidor y carga de datos...',
       );
-      // Pausa inicial para que la petición AJAX empiece en el navegador
-      await this.randomDelay(1000, 1500);
-
       await Promise.race([
         page
           .waitForSelector(
             '.dataTables_processing, .blockUI, div[id*="loading"], div[class*="loading"]',
-            { state: 'hidden', timeout: 10000 },
+            { state: 'hidden', timeout: 8000 },
           )
           .catch(() => {}),
-        page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {}),
+        page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {}),
       ]);
-
-      // Pausa para que DataTables termine de renderizar los botones de exportación
-      await this.randomDelay(800, 1200);
 
       const exportBtn = page.locator(this.excelBtnSelector).first();
       await exportBtn
@@ -835,77 +758,33 @@ export class AutomationService {
     try {
       await foundBtn.waitFor({ state: 'visible', timeout: 15000 });
     } catch (_e) {
-      console.warn(
-        `⚠️ [${filePrefix}] Botón no visible de inmediato. Verificando ReportDetail...`,
+      console.error(
+        `❌ [${filePrefix}] No se encontró el botón "Exportar a Excel"`,
       );
-      await this.ensureReportDetailPage(page);
-      try {
-        await foundBtn.waitFor({ state: 'visible', timeout: 15000 });
-      } catch (_e2) {
-        console.error(
-          `❌ [${filePrefix}] No se encontró el botón "Exportar a Excel"`,
-        );
-        await this.saveDebugSnapshot(
-          page,
-          `${filePrefix.toLowerCase()}_sin_boton_excel`,
-        );
-        throw new Error(
-          'No se encontró el botón "Exportar a Excel". Revisa la captura en descargas/ para ver qué muestra la página.',
-        );
-      }
+      await this.saveDebugSnapshot(
+        page,
+        `${filePrefix.toLowerCase()}_sin_boton_excel`,
+      );
+      throw new Error(
+        'No se encontró el botón "Exportar a Excel". Revisa la captura en descargas/ para ver qué muestra la página.',
+      );
     }
 
     console.log(
       `⬇️ [${filePrefix}] Iniciando clic en exportar y esperando descarga...`,
     );
-    await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-    await this.randomDelay(300, 600);
-    await foundBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await foundBtn.scrollIntoViewIfNeeded();
 
-    // Iniciar escucha del evento de descarga
-    const downloadPromise = page.waitForEvent('download', { timeout: 35000 });
-
-    // Clic en el botón
-    await foundBtn.click({ timeout: 5000 }).catch(async () => {
-      await page
-        .evaluate(() => {
-          const btn = document.querySelector(
-            'button.buttons-excel, a.buttons-excel, .buttons-excel, [title*="Excel"]',
-          ) as HTMLElement;
-          if (btn) btn.click();
-        })
-        .catch(() => {});
-    });
-
-    // Monitorear si la descarga comenzó en los primeros 3.5 segundos
-    const download = await Promise.race([
-      downloadPromise,
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500)),
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 30000 }),
+      foundBtn.click(),
     ]);
-
-    // Si aún no inició la descarga tras 3.5s, reintentar con clic directo por DOM y force click
-    if (!download) {
-      console.log(
-        `⚠️ [${filePrefix}] La descarga no inició al primer clic. Reintentando clic directo en botón...`,
-      );
-      await page
-        .evaluate(() => {
-          const btn = document.querySelector(
-            'button.buttons-excel, a.buttons-excel, .buttons-excel, [title*="Excel"]',
-          ) as HTMLElement;
-          if (btn) btn.click();
-        })
-        .catch(() => {});
-      await foundBtn.click({ force: true }).catch(() => {});
-    }
-
-    const finalDownload = download || (await downloadPromise);
 
     const excelPath = path.join(
       this.downloadPath,
       `${filePrefix}_${Date.now()}.xlsx`,
     );
-    await finalDownload.saveAs(excelPath);
+    await download.saveAs(excelPath);
     console.log(
       `✅ [${filePrefix}] Archivo descargado exitosamente en: ${excelPath}`,
     );
