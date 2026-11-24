@@ -790,15 +790,21 @@ export class AutomationService {
       console.log(
         '⏳ [REPORT-UPDATE] Esperando respuesta del servidor y carga de datos...',
       );
+      // Pausa inicial para que la petición AJAX empiece en el navegador
+      await this.randomDelay(1000, 1500);
+
       await Promise.race([
         page
           .waitForSelector(
             '.dataTables_processing, .blockUI, div[id*="loading"], div[class*="loading"]',
-            { state: 'hidden', timeout: 8000 },
+            { state: 'hidden', timeout: 10000 },
           )
           .catch(() => {}),
-        page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {}),
+        page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {}),
       ]);
+
+      // Pausa para que DataTables termine de renderizar los botones de exportación
+      await this.randomDelay(800, 1200);
 
       const exportBtn = page.locator(this.excelBtnSelector).first();
       await exportBtn
@@ -852,18 +858,54 @@ export class AutomationService {
     console.log(
       `⬇️ [${filePrefix}] Iniciando clic en exportar y esperando descarga...`,
     );
-    await foundBtn.scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+    await this.randomDelay(300, 600);
+    await foundBtn.scrollIntoViewIfNeeded().catch(() => {});
 
-    const [download] = await Promise.all([
-      page.waitForEvent('download', { timeout: 30000 }),
-      foundBtn.click(),
+    // Iniciar escucha del evento de descarga
+    const downloadPromise = page.waitForEvent('download', { timeout: 35000 });
+
+    // Clic en el botón
+    await foundBtn.click({ timeout: 5000 }).catch(async () => {
+      await page
+        .evaluate(() => {
+          const btn = document.querySelector(
+            'button.buttons-excel, a.buttons-excel, .buttons-excel, [title*="Excel"]',
+          ) as HTMLElement;
+          if (btn) btn.click();
+        })
+        .catch(() => {});
+    });
+
+    // Monitorear si la descarga comenzó en los primeros 3.5 segundos
+    const download = await Promise.race([
+      downloadPromise,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500)),
     ]);
+
+    // Si aún no inició la descarga tras 3.5s, reintentar con clic directo por DOM y force click
+    if (!download) {
+      console.log(
+        `⚠️ [${filePrefix}] La descarga no inició al primer clic. Reintentando clic directo en botón...`,
+      );
+      await page
+        .evaluate(() => {
+          const btn = document.querySelector(
+            'button.buttons-excel, a.buttons-excel, .buttons-excel, [title*="Excel"]',
+          ) as HTMLElement;
+          if (btn) btn.click();
+        })
+        .catch(() => {});
+      await foundBtn.click({ force: true }).catch(() => {});
+    }
+
+    const finalDownload = download || (await downloadPromise);
 
     const excelPath = path.join(
       this.downloadPath,
       `${filePrefix}_${Date.now()}.xlsx`,
     );
-    await download.saveAs(excelPath);
+    await finalDownload.saveAs(excelPath);
     console.log(
       `✅ [${filePrefix}] Archivo descargado exitosamente en: ${excelPath}`,
     );
