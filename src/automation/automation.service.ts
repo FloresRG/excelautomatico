@@ -37,6 +37,9 @@ export class AutomationService {
   private isLoggedInCinebol = false;
   private currentPageUrlCinebol = '';
 
+  // Control de concurrencia por cuenta para evitar colisiones entre llamadas simultáneas
+  private locks: { [key: string]: Promise<any> } = {};
+
   constructor(@Optional() private readonly configService?: ConfigService) {
     const customDownloadPath = this.getEnv('DOWNLOAD_PATH');
     this.downloadPath = customDownloadPath
@@ -106,6 +109,58 @@ export class AutomationService {
     }
   }
 
+  /* ─────────── CONCURRENCIA Y CICLO DE VIDA ─────────── */
+
+  /**
+   * Ejecuta una tarea bloqueando el acceso concurrente para la misma cuenta.
+   * Si dos peticiones llegan al mismo tiempo para 'ALT', la segunda espera a que la primera termine.
+   */
+  private async runWithLock<T>(
+    accountType: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    while (this.locks[accountType]) {
+      console.log(
+        `⏳ [${accountType}] Otra operación en curso. Esperando a que termine...`,
+      );
+      await this.locks[accountType];
+    }
+
+    let releaseLock: () => void = () => {};
+    this.locks[accountType] = new Promise<void>((resolve) => {
+      releaseLock = () => resolve();
+    });
+
+    try {
+      return await fn();
+    } finally {
+      delete this.locks[accountType];
+      releaseLock!();
+    }
+  }
+
+  /**
+   * Determina si el navegador debe cerrarse tras cada ejecución.
+   * Por defecto es TRUE para garantizar que cada ejecución comience 100% limpia sin errores de sesión bancaria caducada.
+   */
+  shouldCloseBrowserAfterRun(): boolean {
+    const keepOpen = this.getEnv('KEEP_BROWSER_OPEN');
+    if (keepOpen !== undefined) {
+      const clean = keepOpen.trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+      if (clean === 'true' || clean === '1') {
+        return false;
+      }
+    }
+    const closeAfter = this.getEnv('CLOSE_BROWSER_AFTER_RUN');
+    if (closeAfter !== undefined) {
+      const clean = closeAfter.trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+      if (clean === 'false' || clean === '0') {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /* ─────────── CHECK LOGIN ─────────── */
 
   private async isAlreadyLoggedIn(page: Page): Promise<boolean> {
@@ -114,27 +169,40 @@ export class AutomationService {
       const currentUrl = page.url().toLowerCase();
 
       // Si está en la pantalla de autenticación IAM o login, no está logueado
-      if (currentUrl.includes('authiam') || currentUrl.includes('/index')) {
+      if (
+        currentUrl.includes('authiam') ||
+        currentUrl.includes('/index') ||
+        currentUrl.includes('/login')
+      ) {
         return false;
       }
 
-      // Si la URL es ReportDetail o Dashboard, la sesión ya está dentro del portal
-      if (
-        currentUrl.includes('reportdetail') ||
-        currentUrl.includes('dashboard')
-      ) {
-        return true;
+      // Si existen campos de login en el DOM, la sesión no está activa
+      const hasLoginFields =
+        (await page.$('#authname, #authpass, #authbtn').catch(() => null)) !==
+        null;
+      if (hasLoginFields) {
+        return false;
       }
 
-      // Comprobar elementos típicos del portal activo
-      const hasExportBtn = (await page.$(this.excelBtnSelector)) !== null;
-      const hasReportControls =
-        (await page.$('#startDate1, #fondoreportes')) !== null;
-      return (
-        hasExportBtn ||
-        hasReportControls ||
-        (currentUrl.includes('multiplica') && !currentUrl.includes('authiam'))
-      );
+      // Detectar avisos o modales de sesión expirada
+      const hasExpiredNotice =
+        (await page
+          .$(
+            'text="sesión ha expirado", text="sesion ha expirado", text="sesión caducada", text="inactividad"',
+          )
+          .catch(() => null)) !== null;
+      if (hasExpiredNotice) {
+        return false;
+      }
+
+      // Para considerar la sesión activa, los controles reales del reporte deben existir
+      const hasControls =
+        (await page
+          .$('#startDate1, #fondoreportes, button.buttons-excel, a.buttons-excel')
+          .catch(() => null)) !== null;
+
+      return hasControls;
     } catch {
       return false;
     }
@@ -1087,6 +1155,41 @@ export class AutomationService {
     }
   }
 
+  async closeSession(accountType: 'MAIN' | 'ALT' | 'CINEBOL') {
+    try {
+      if (accountType === 'MAIN') {
+        if (this.browser) {
+          await this.browser.close().catch(() => {});
+        }
+        this.browser = null;
+        this.page = null;
+        this.isLoggedIn = false;
+        this.currentPageUrl = '';
+      } else if (accountType === 'ALT') {
+        if (this.browserAlt) {
+          await this.browserAlt.close().catch(() => {});
+        }
+        this.browserAlt = null;
+        this.pageAlt = null;
+        this.isLoggedInAlt = false;
+        this.currentPageUrlAlt = '';
+      } else {
+        if (this.browserCinebol) {
+          await this.browserCinebol.close().catch(() => {});
+        }
+        this.browserCinebol = null;
+        this.pageCinebol = null;
+        this.isLoggedInCinebol = false;
+        this.currentPageUrlCinebol = '';
+      }
+    } catch (err: any) {
+      console.warn(
+        `⚠️ [CLOSE-${accountType}] Error al cerrar sesión/navegador:`,
+        err.message,
+      );
+    }
+  }
+
   private async performLoginByType(
     accountType: 'MAIN' | 'ALT' | 'CINEBOL',
     page: Page,
@@ -1120,9 +1223,7 @@ export class AutomationService {
     // 1. Si no existe o se cerró la página/navegador, iniciar una nueva instancia limpia
     if (!this.isSessionAlive(browser, page)) {
       console.log(`🆕 [${accountType}] Iniciando nueva sesión del navegador...`);
-      if (browser) {
-        await browser.close().catch(() => {});
-      }
+      await this.closeSession(accountType);
       const init = await this.initializeBrowser();
       browser = init.browser;
       page = init.page;
@@ -1130,8 +1231,7 @@ export class AutomationService {
 
       const loginOk = await this.performLoginByType(accountType, page);
       if (!loginOk) {
-        await browser.close().catch(() => {});
-        this.setSessionVars(accountType, null, null, false);
+        await this.closeSession(accountType);
         throw new Error(`Falló el login con credenciales de ${accountType}`);
       }
       this.setSessionVars(accountType, browser, page, true);
@@ -1139,35 +1239,36 @@ export class AutomationService {
     }
 
     // 2. Si el navegador está vivo en memoria, verificar si la sesión sigue activa dentro del portal
-    console.log(`♻️ [${accountType}] Reutilizando navegador existente...`);
+    console.log(`♻️ [${accountType}] Verificando sesión de navegador existente...`);
     const loggedIn = await this.isAlreadyLoggedIn(page!);
 
     if (!loggedIn) {
-      console.log(`🔑 [${accountType}] Sesión no iniciada o vencida. Realizando login...`);
-      try {
-        const loginOk = await this.performLoginByType(accountType, page!);
-        if (!loginOk) {
-          throw new Error('Login no completado');
-        }
-        this.setSessionVars(accountType, browser, page, true);
-      } catch (err: any) {
-        console.warn(`⚠️ [${accountType}] No se pudo reutilizar la pestaña existente (${err.message}). Abriendo navegador limpio...`);
-        await browser!.close().catch(() => {});
-        const init = await this.initializeBrowser();
-        browser = init.browser;
-        page = init.page;
-        this.setSessionVars(accountType, browser, page, false);
+      console.log(
+        `🔑 [${accountType}] Sesión no iniciada o vencida. Limpiando y creando nueva sesión limpia...`,
+      );
+      await this.closeSession(accountType);
+      const init = await this.initializeBrowser();
+      browser = init.browser;
+      page = init.page;
+      this.setSessionVars(accountType, browser, page, false);
 
-        const retryOk = await this.performLoginByType(accountType, page);
-        if (!retryOk) {
-          await browser.close().catch(() => {});
-          this.setSessionVars(accountType, null, null, false);
-          throw new Error(`Falló el login con credenciales de ${accountType}`);
-        }
-        this.setSessionVars(accountType, browser, page, true);
+      const loginOk = await this.performLoginByType(accountType, page);
+      if (!loginOk) {
+        await this.closeSession(accountType);
+        throw new Error(`Falló el login con credenciales de ${accountType}`);
       }
+      this.setSessionVars(accountType, browser, page, true);
+      return { browser, page };
     } else {
       await this.refreshPageForLatestData(page!);
+      const stillLoggedIn = await this.isAlreadyLoggedIn(page!);
+      if (!stillLoggedIn) {
+        console.warn(
+          `⚠️ [${accountType}] Tras refrescar la página se perdió la sesión (sesión bancaria caducada). Abriendo sesión limpia...`,
+        );
+        await this.closeSession(accountType);
+        return this.ensureSession(accountType);
+      }
     }
 
     return { browser: browser!, page: page! };
@@ -1179,66 +1280,78 @@ export class AutomationService {
     fecha?: string,
     skipLaravel: boolean = false,
   ) {
-    const { page } = await this.ensureSession('MAIN');
+    return this.runWithLock('MAIN', async () => {
+      try {
+        const { page } = await this.ensureSession('MAIN');
 
-    const fechaFiltro = fecha || this.getTodayBolivia();
-    console.log(
-      `🔄 [MAIN] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
-    );
-    const updated = await this.updateReportData(page, fechaFiltro);
-    if (!updated) {
-      console.warn(
-        '⚠️ [MAIN] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
-      );
-    }
+        const fechaFiltro = fecha || this.getTodayBolivia();
+        console.log(
+          `🔄 [MAIN] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
+        );
+        const updated = await this.updateReportData(page, fechaFiltro);
+        if (!updated) {
+          console.warn(
+            '⚠️ [MAIN] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
+          );
+        }
 
-    const tableStatus = await this.hasTableRecords(page, 'MAIN');
-    if (!tableStatus.hasRecords) {
-      console.log(
-        `ℹ️ [MAIN] No existen registros en la tabla para la fecha ${fechaFiltro}. Se omite la descarga de Excel.`,
-      );
-      return {
-        success: false,
-        hasRecords: false,
-        message: `No existen registros para la fecha ${fechaFiltro}`,
-        fechaFiltro,
-        registros: 0,
-        infoTabla: tableStatus.infoText,
-        laravelResponse: null,
-        timestamp: new Date().toISOString(),
-        reusedSession: this.isLoggedIn,
-      };
-    }
+        const tableStatus = await this.hasTableRecords(page, 'MAIN');
+        if (!tableStatus.hasRecords) {
+          console.log(
+            `ℹ️ [MAIN] No existen registros en la tabla para la fecha ${fechaFiltro}. Se omite la descarga de Excel.`,
+          );
+          return {
+            success: false,
+            hasRecords: false,
+            message: `No existen registros para la fecha ${fechaFiltro}`,
+            fechaFiltro,
+            registros: 0,
+            infoTabla: tableStatus.infoText,
+            laravelResponse: null,
+            timestamp: new Date().toISOString(),
+            reusedSession: !this.shouldCloseBrowserAfterRun(),
+          };
+        }
 
-    const excelPath = await this.triggerExcelDownload(page, 'Reporte');
+        const excelPath = await this.triggerExcelDownload(page, 'Reporte');
 
-    if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
-      console.log(
-        `💾 [MAIN] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
-      );
-      return {
-        success: true,
-        message:
-          'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
-        excelPath,
-        fechaFiltro,
-        laravelResponse: { skipped: true },
-        timestamp: new Date().toISOString(),
-        reusedSession: this.isLoggedIn,
-      };
-    }
+        if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
+          console.log(
+            `💾 [MAIN] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
+          );
+          return {
+            success: true,
+            message:
+              'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
+            excelPath,
+            fechaFiltro,
+            laravelResponse: { skipped: true },
+            timestamp: new Date().toISOString(),
+            reusedSession: !this.shouldCloseBrowserAfterRun(),
+          };
+        }
 
-    const laravelResponse = await this.sendExcelToLaravel(excelPath);
+        const laravelResponse = await this.sendExcelToLaravel(excelPath);
 
-    return {
-      success: true,
-      message: 'Excel descargado y enviado a Laravel exitosamente',
-      excelPath,
-      fechaFiltro,
-      laravelResponse,
-      timestamp: new Date().toISOString(),
-      reusedSession: this.isLoggedIn,
-    };
+        return {
+          success: true,
+          message: 'Excel descargado y enviado a Laravel exitosamente',
+          excelPath,
+          fechaFiltro,
+          laravelResponse,
+          timestamp: new Date().toISOString(),
+          reusedSession: !this.shouldCloseBrowserAfterRun(),
+        };
+      } catch (error: any) {
+        console.error(`❌ [MAIN] Error durante automatización:`, error.message);
+        await this.closeSession('MAIN');
+        throw error;
+      } finally {
+        if (this.shouldCloseBrowserAfterRun()) {
+          await this.closeSession('MAIN');
+        }
+      }
+    });
   }
 
   /* ─────────── MAIN ALTERNATIVO ─────────── */
@@ -1247,70 +1360,82 @@ export class AutomationService {
     fecha?: string,
     skipLaravel: boolean = false,
   ) {
-    const { page } = await this.ensureSession('ALT');
+    return this.runWithLock('ALT', async () => {
+      try {
+        const { page } = await this.ensureSession('ALT');
 
-    const fechaFiltro = fecha || this.getTodayBolivia();
-    console.log(
-      `🔄 [ALT] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
-    );
-    const updated = await this.updateReportData(page, fechaFiltro);
-    if (!updated) {
-      console.warn(
-        '⚠️ [ALT] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
-      );
-    }
+        const fechaFiltro = fecha || this.getTodayBolivia();
+        console.log(
+          `🔄 [ALT] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
+        );
+        const updated = await this.updateReportData(page, fechaFiltro);
+        if (!updated) {
+          console.warn(
+            '⚠️ [ALT] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
+          );
+        }
 
-    const tableStatus = await this.hasTableRecords(page, 'ALT');
-    if (!tableStatus.hasRecords) {
-      console.log(
-        `ℹ️ [ALT] No existen registros en la tabla para la fecha ${fechaFiltro}. Se omite la descarga de Excel.`,
-      );
-      return {
-        success: false,
-        hasRecords: false,
-        message: `No existen registros para la fecha ${fechaFiltro}`,
-        fechaFiltro,
-        registros: 0,
-        infoTabla: tableStatus.infoText,
-        laravelResponse: null,
-        timestamp: new Date().toISOString(),
-        reusedSession: this.isLoggedInAlt,
-      };
-    }
+        const tableStatus = await this.hasTableRecords(page, 'ALT');
+        if (!tableStatus.hasRecords) {
+          console.log(
+            `ℹ️ [ALT] No existen registros en la tabla para la fecha ${fechaFiltro}. Se omite la descarga de Excel.`,
+          );
+          return {
+            success: false,
+            hasRecords: false,
+            message: `No existen registros para la fecha ${fechaFiltro}`,
+            fechaFiltro,
+            registros: 0,
+            infoTabla: tableStatus.infoText,
+            laravelResponse: null,
+            timestamp: new Date().toISOString(),
+            reusedSession: !this.shouldCloseBrowserAfterRun(),
+          };
+        }
 
-    const excelPath = await this.triggerExcelDownload(
-      page,
-      'ReporteAlt',
-    );
+        const excelPath = await this.triggerExcelDownload(
+          page,
+          'ReporteAlt',
+        );
 
-    if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
-      console.log(
-        `💾 [ALT] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
-      );
-      return {
-        success: true,
-        message:
-          'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
-        excelPath,
-        fechaFiltro,
-        laravelResponse: { skipped: true },
-        timestamp: new Date().toISOString(),
-        reusedSession: this.isLoggedInAlt,
-      };
-    }
+        if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
+          console.log(
+            `💾 [ALT] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
+          );
+          return {
+            success: true,
+            message:
+              'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
+            excelPath,
+            fechaFiltro,
+            laravelResponse: { skipped: true },
+            timestamp: new Date().toISOString(),
+            reusedSession: !this.shouldCloseBrowserAfterRun(),
+          };
+        }
 
-    const laravelResponse = await this.sendExcelToLaravel(excelPath);
+        const laravelResponse = await this.sendExcelToLaravel(excelPath);
 
-    return {
-      success: true,
-      message:
-        'Excel descargado y enviado a Laravel exitosamente (usando credenciales alternativas)',
-      excelPath,
-      fechaFiltro,
-      laravelResponse,
-      timestamp: new Date().toISOString(),
-      reusedSession: this.isLoggedInAlt,
-    };
+        return {
+          success: true,
+          message:
+            'Excel descargado y enviado a Laravel exitosamente (usando credenciales alternativas)',
+          excelPath,
+          fechaFiltro,
+          laravelResponse,
+          timestamp: new Date().toISOString(),
+          reusedSession: !this.shouldCloseBrowserAfterRun(),
+        };
+      } catch (error: any) {
+        console.error(`❌ [ALT] Error durante automatización:`, error.message);
+        await this.closeSession('ALT');
+        throw error;
+      } finally {
+        if (this.shouldCloseBrowserAfterRun()) {
+          await this.closeSession('ALT');
+        }
+      }
+    });
   }
 
   /* ─────────── MAIN CON FILTRO FECHA (CAJALIVE) ─────────── */
@@ -1319,67 +1444,82 @@ export class AutomationService {
     fecha: string,
     skipLaravel: boolean = false,
   ) {
-    const { page } = await this.ensureSession('ALT');
+    return this.runWithLock('ALT', async () => {
+      try {
+        const { page } = await this.ensureSession('ALT');
 
-    console.log(`📅 [FILTER] Aplicando filtro de fecha: ${fecha}...`);
-    const filterApplied = await this.updateReportData(page, fecha);
-    if (!filterApplied) {
-      throw new Error(
-        `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
-      );
-    }
+        console.log(`📅 [FILTER] Aplicando filtro de fecha: ${fecha}...`);
+        const filterApplied = await this.updateReportData(page, fecha);
+        if (!filterApplied) {
+          throw new Error(
+            `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
+          );
+        }
 
-    const tableStatus = await this.hasTableRecords(page, 'ReporteFilter');
-    if (!tableStatus.hasRecords) {
-      console.log(
-        `ℹ️ [FILTER] No existen registros en la tabla para la fecha ${fecha}. Se omite la descarga de Excel.`,
-      );
-      return {
-        success: false,
-        hasRecords: false,
-        message: `No existen registros para la fecha ${fecha}`,
-        fechaFiltro: fecha,
-        registros: 0,
-        infoTabla: tableStatus.infoText,
-        laravelResponse: null,
-        timestamp: new Date().toISOString(),
-        reusedSession: this.isLoggedInAlt,
-      };
-    }
+        const tableStatus = await this.hasTableRecords(page, 'ReporteFilter');
+        if (!tableStatus.hasRecords) {
+          console.log(
+            `ℹ️ [FILTER] No existen registros en la tabla para la fecha ${fecha}. Se omite la descarga de Excel.`,
+          );
+          return {
+            success: false,
+            hasRecords: false,
+            message: `No existen registros para la fecha ${fecha}`,
+            fechaFiltro: fecha,
+            registros: 0,
+            infoTabla: tableStatus.infoText,
+            laravelResponse: null,
+            timestamp: new Date().toISOString(),
+            reusedSession: !this.shouldCloseBrowserAfterRun(),
+          };
+        }
 
-    const excelPath = await this.triggerExcelDownload(
-      page,
-      'ReporteFilter',
-    );
+        const excelPath = await this.triggerExcelDownload(
+          page,
+          'ReporteFilter',
+        );
 
-    if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
-      console.log(
-        `💾 [FILTER] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
-      );
-      return {
-        success: true,
-        message:
-          'Excel descargado con filtro de fecha (modo prueba: no enviado a Laravel)',
-        excelPath,
-        fechaFiltro: fecha,
-        laravelResponse: { skipped: true },
-        timestamp: new Date().toISOString(),
-        reusedSession: this.isLoggedInAlt,
-      };
-    }
+        if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
+          console.log(
+            `💾 [FILTER] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
+          );
+          return {
+            success: true,
+            message:
+              'Excel descargado con filtro de fecha (modo prueba: no enviado a Laravel)',
+            excelPath,
+            fechaFiltro: fecha,
+            laravelResponse: { skipped: true },
+            timestamp: new Date().toISOString(),
+            reusedSession: !this.shouldCloseBrowserAfterRun(),
+          };
+        }
 
-    const laravelResponse = await this.sendExcelToLaravel(excelPath);
+        const laravelResponse = await this.sendExcelToLaravel(excelPath);
 
-    return {
-      success: true,
-      message:
-        'Excel descargado con filtro de fecha y enviado a Laravel exitosamente',
-      excelPath,
-      fechaFiltro: fecha,
-      laravelResponse,
-      timestamp: new Date().toISOString(),
-      reusedSession: this.isLoggedInAlt,
-    };
+        return {
+          success: true,
+          message:
+            'Excel descargado con filtro de fecha y enviado a Laravel exitosamente',
+          excelPath,
+          fechaFiltro: fecha,
+          laravelResponse,
+          timestamp: new Date().toISOString(),
+          reusedSession: !this.shouldCloseBrowserAfterRun(),
+        };
+      } catch (error: any) {
+        console.error(
+          `❌ [FILTER-ALT] Error durante automatización:`,
+          error.message,
+        );
+        await this.closeSession('ALT');
+        throw error;
+      } finally {
+        if (this.shouldCloseBrowserAfterRun()) {
+          await this.closeSession('ALT');
+        }
+      }
+    });
   }
 
   /* ─────────── MAIN CINEBOL ─────────── */
@@ -1388,70 +1528,85 @@ export class AutomationService {
     fecha?: string,
     skipLaravel: boolean = false,
   ) {
-    const { page } = await this.ensureSession('CINEBOL');
+    return this.runWithLock('CINEBOL', async () => {
+      try {
+        const { page } = await this.ensureSession('CINEBOL');
 
-    const fechaFiltro = fecha || this.getTodayBolivia();
-    console.log(
-      `🔄 [CINEBOL] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
-    );
-    const updated = await this.updateReportData(page, fechaFiltro);
-    if (!updated) {
-      console.warn(
-        '⚠️ [CINEBOL] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
-      );
-    }
+        const fechaFiltro = fecha || this.getTodayBolivia();
+        console.log(
+          `🔄 [CINEBOL] Actualizando reporte antes de exportar (Fecha: ${fechaFiltro})...`,
+        );
+        const updated = await this.updateReportData(page, fechaFiltro);
+        if (!updated) {
+          console.warn(
+            '⚠️ [CINEBOL] No se pudo actualizar el reporte con #fondoreportes, intentando exportar...',
+          );
+        }
 
-    const tableStatus = await this.hasTableRecords(page, 'CINEBOL');
-    if (!tableStatus.hasRecords) {
-      console.log(
-        `ℹ️ [CINEBOL] No existen registros en la tabla para la fecha ${fechaFiltro}. Se omite la descarga de Excel.`,
-      );
-      return {
-        success: false,
-        hasRecords: false,
-        message: `No existen registros para la fecha ${fechaFiltro}`,
-        fechaFiltro,
-        registros: 0,
-        infoTabla: tableStatus.infoText,
-        laravelResponse: null,
-        timestamp: new Date().toISOString(),
-        reusedSession: this.isLoggedInCinebol,
-      };
-    }
+        const tableStatus = await this.hasTableRecords(page, 'CINEBOL');
+        if (!tableStatus.hasRecords) {
+          console.log(
+            `ℹ️ [CINEBOL] No existen registros en la tabla para la fecha ${fechaFiltro}. Se omite la descarga de Excel.`,
+          );
+          return {
+            success: false,
+            hasRecords: false,
+            message: `No existen registros para la fecha ${fechaFiltro}`,
+            fechaFiltro,
+            registros: 0,
+            infoTabla: tableStatus.infoText,
+            laravelResponse: null,
+            timestamp: new Date().toISOString(),
+            reusedSession: !this.shouldCloseBrowserAfterRun(),
+          };
+        }
 
-    const excelPath = await this.triggerExcelDownload(
-      page,
-      'ReporteCinebol',
-    );
+        const excelPath = await this.triggerExcelDownload(
+          page,
+          'ReporteCinebol',
+        );
 
-    if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
-      console.log(
-        `💾 [CINEBOL] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
-      );
-      return {
-        success: true,
-        message:
-          'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
-        excelPath,
-        fechaFiltro,
-        laravelResponse: { skipped: true },
-        timestamp: new Date().toISOString(),
-        reusedSession: this.isLoggedInCinebol,
-      };
-    }
+        if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
+          console.log(
+            `💾 [CINEBOL] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
+          );
+          return {
+            success: true,
+            message:
+              'Excel descargado exitosamente (modo prueba: no enviado a Laravel)',
+            excelPath,
+            fechaFiltro,
+            laravelResponse: { skipped: true },
+            timestamp: new Date().toISOString(),
+            reusedSession: !this.shouldCloseBrowserAfterRun(),
+          };
+        }
 
-    const laravelResponse = await this.sendExcelToLaravel(excelPath);
+        const laravelResponse = await this.sendExcelToLaravel(excelPath);
 
-    return {
-      success: true,
-      message:
-        'Excel descargado y enviado a Laravel exitosamente (usando credenciales Cinebol)',
-      excelPath,
-      fechaFiltro,
-      laravelResponse,
-      timestamp: new Date().toISOString(),
-      reusedSession: this.isLoggedInCinebol,
-    };
+        return {
+          success: true,
+          message:
+            'Excel descargado y enviado a Laravel exitosamente (usando credenciales Cinebol)',
+          excelPath,
+          fechaFiltro,
+          laravelResponse,
+          timestamp: new Date().toISOString(),
+          reusedSession: !this.shouldCloseBrowserAfterRun(),
+        };
+      } catch (error: any) {
+        console.error(
+          `❌ [CINEBOL] Error durante automatización:`,
+          error.message,
+        );
+        await this.closeSession('CINEBOL');
+        throw error;
+      } finally {
+        if (this.shouldCloseBrowserAfterRun()) {
+          await this.closeSession('CINEBOL');
+        }
+      }
+    });
   }
 
   /* ─────────── MAIN CON FILTRO FECHA (CINEBOL) ─────────── */
@@ -1460,70 +1615,85 @@ export class AutomationService {
     fecha: string,
     skipLaravel: boolean = false,
   ) {
-    const { page } = await this.ensureSession('CINEBOL');
+    return this.runWithLock('CINEBOL', async () => {
+      try {
+        const { page } = await this.ensureSession('CINEBOL');
 
-    console.log(`📅 [FILTER-CINEBOL] Aplicando filtro de fecha: ${fecha}...`);
-    const filterApplied = await this.updateReportData(page, fecha);
-    if (!filterApplied) {
-      throw new Error(
-        `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
-      );
-    }
+        console.log(`📅 [FILTER-CINEBOL] Aplicando filtro de fecha: ${fecha}...`);
+        const filterApplied = await this.updateReportData(page, fecha);
+        if (!filterApplied) {
+          throw new Error(
+            `No se pudo aplicar el filtro de fecha "${fecha}". Revisa la captura en descargas/.`,
+          );
+        }
 
-    const tableStatus = await this.hasTableRecords(
-      page,
-      'ReporteFilterCinebol',
-    );
-    if (!tableStatus.hasRecords) {
-      console.log(
-        `ℹ️ [FILTER-CINEBOL] No existen registros en la tabla para la fecha ${fecha}. Se omite la descarga de Excel.`,
-      );
-      return {
-        success: false,
-        hasRecords: false,
-        message: `No existen registros para la fecha ${fecha}`,
-        fechaFiltro: fecha,
-        registros: 0,
-        infoTabla: tableStatus.infoText,
-        laravelResponse: null,
-        timestamp: new Date().toISOString(),
-        reusedSession: this.isLoggedInCinebol,
-      };
-    }
+        const tableStatus = await this.hasTableRecords(
+          page,
+          'ReporteFilterCinebol',
+        );
+        if (!tableStatus.hasRecords) {
+          console.log(
+            `ℹ️ [FILTER-CINEBOL] No existen registros en la tabla para la fecha ${fecha}. Se omite la descarga de Excel.`,
+          );
+          return {
+            success: false,
+            hasRecords: false,
+            message: `No existen registros para la fecha ${fecha}`,
+            fechaFiltro: fecha,
+            registros: 0,
+            infoTabla: tableStatus.infoText,
+            laravelResponse: null,
+            timestamp: new Date().toISOString(),
+            reusedSession: !this.shouldCloseBrowserAfterRun(),
+          };
+        }
 
-    const excelPath = await this.triggerExcelDownload(
-      page,
-      'ReporteFilterCinebol',
-    );
+        const excelPath = await this.triggerExcelDownload(
+          page,
+          'ReporteFilterCinebol',
+        );
 
-    if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
-      console.log(
-        `💾 [FILTER-CINEBOL] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
-      );
-      return {
-        success: true,
-        message:
-          'Excel descargado con filtro de fecha (modo prueba: no enviado a Laravel)',
-        excelPath,
-        fechaFiltro: fecha,
-        laravelResponse: { skipped: true },
-        timestamp: new Date().toISOString(),
-        reusedSession: this.isLoggedInCinebol,
-      };
-    }
+        if (skipLaravel || this.getEnv('SKIP_LARAVEL') === 'true') {
+          console.log(
+            `💾 [FILTER-CINEBOL] Modo prueba: Archivo conservado en ${excelPath} (no enviado a Laravel)`,
+          );
+          return {
+            success: true,
+            message:
+              'Excel descargado con filtro de fecha (modo prueba: no enviado a Laravel)',
+            excelPath,
+            fechaFiltro: fecha,
+            laravelResponse: { skipped: true },
+            timestamp: new Date().toISOString(),
+            reusedSession: !this.shouldCloseBrowserAfterRun(),
+          };
+        }
 
-    const laravelResponse = await this.sendExcelToLaravel(excelPath);
+        const laravelResponse = await this.sendExcelToLaravel(excelPath);
 
-    return {
-      success: true,
-      message:
-        'Excel descargado con filtro de fecha y enviado a Laravel exitosamente (usando credenciales Cinebol)',
-      excelPath,
-      fechaFiltro: fecha,
-      laravelResponse,
-      timestamp: new Date().toISOString(),
-      reusedSession: this.isLoggedInCinebol,
-    };
+        return {
+          success: true,
+          message:
+            'Excel descargado con filtro de fecha y enviado a Laravel exitosamente (usando credenciales Cinebol)',
+          excelPath,
+          fechaFiltro: fecha,
+          laravelResponse,
+          timestamp: new Date().toISOString(),
+          reusedSession: !this.shouldCloseBrowserAfterRun(),
+        };
+      } catch (error: any) {
+        console.error(
+          `❌ [FILTER-CINEBOL] Error durante automatización:`,
+          error.message,
+        );
+        await this.closeSession('CINEBOL');
+        throw error;
+      } finally {
+        if (this.shouldCloseBrowserAfterRun()) {
+          await this.closeSession('CINEBOL');
+        }
+      }
+    });
   }
 
   /* ─────────── RETROCOMPATIBILIDAD ─────────── */
@@ -1544,26 +1714,9 @@ export class AutomationService {
 
   async closeBrowser() {
     console.log('🛑 [CLOSE] Cerrando navegadores...');
-    if (this.browser) {
-      await this.browser.close().catch(() => {});
-      this.browser = null;
-      this.page = null;
-      this.isLoggedIn = false;
-    }
-
-    if (this.browserAlt) {
-      await this.browserAlt.close().catch(() => {});
-      this.browserAlt = null;
-      this.pageAlt = null;
-      this.isLoggedInAlt = false;
-    }
-
-    if (this.browserCinebol) {
-      await this.browserCinebol.close().catch(() => {});
-      this.browserCinebol = null;
-      this.pageCinebol = null;
-      this.isLoggedInCinebol = false;
-    }
+    await this.closeSession('MAIN');
+    await this.closeSession('ALT');
+    await this.closeSession('CINEBOL');
     console.log('✅ [CLOSE] Navegadores cerrados.');
   }
 

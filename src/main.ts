@@ -66,7 +66,16 @@ async function bootstrap() {
   console.log(
     `POST /automation/close-browser           - Cerrar navegador manualmente\n`,
   );
-  console.log(`💡 El navegador permanece ABIERTO entre llamadas\n`);
+  const isBrowserPersisted =
+    process.env.KEEP_BROWSER_OPEN === 'true' ||
+    process.env.CLOSE_BROWSER_AFTER_RUN === 'false';
+  console.log(
+    `💡 Modo navegador: ${
+      isBrowserPersisted
+        ? 'El navegador permanece ABIERTO entre llamadas (KEEP_BROWSER_OPEN=true)'
+        : 'Cierre y limpieza automática tras cada automatización (Previene sesiones zombis de BCP)'
+    }\n`,
+  );
 
   // Obtener instancia del service para manejar cierre limpio
   const automationService = app.get(AutomationService);
